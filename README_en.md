@@ -19,7 +19,7 @@ pip install .
 Install directly from GitHub:
 
 ```bash
-pip install git+https://github.com/tukisuwa/CAME.git
+pip install git+https://github.com/tukisuwa/CAME.git@test2
 ```
 
 With the commands above, the pure-PyTorch `CAME` optimizer is the safest starting point.
@@ -78,7 +78,7 @@ Why `--no-build-isolation`:
 You can also install from GitHub in the same way:
 
 ```bash
-pip install -e git+https://github.com/tukisuwa/CAME.git#egg=came-pytorch-preview --no-build-isolation
+pip install -e git+https://github.com/tukisuwa/CAME.git@test2#egg=came-pytorch-preview --no-build-isolation
 ```
 
 ### 4. Manual build for local development

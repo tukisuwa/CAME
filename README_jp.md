@@ -19,7 +19,7 @@ pip install .
 GitHub から直接インストール:
 
 ```bash
-pip install git+https://github.com/tukisuwa/CAME.git
+pip install git+https://github.com/tukisuwa/CAME.git@test2
 ```
 
 上記のコマンドでは、純 PyTorch の `CAME` オプティマイザが最も安全な出発点です。
@@ -78,7 +78,7 @@ pip install -e . --no-build-isolation
 GitHub から同様にインストールすることもできます:
 
 ```bash
-pip install -e git+https://github.com/tukisuwa/CAME.git#egg=came-pytorch-preview --no-build-isolation
+pip install -e git+https://github.com/tukisuwa/CAME.git@test2#egg=came-pytorch-preview --no-build-isolation
 ```
 
 ### 4. ローカル開発用の手動ビルド
