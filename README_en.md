@@ -22,7 +22,6 @@ Install directly from GitHub:
 pip install git+https://github.com/tukisuwa/CAME.git@test2
 ```
 
-With the commands above, the pure-PyTorch `CAME` optimizer is the safest starting point.
 
 ## CUDA Build Guide for Beginners
 

@@ -22,7 +22,6 @@ GitHub から直接インストール:
 pip install git+https://github.com/tukisuwa/CAME.git@test2
 ```
 
-上記のコマンドでは、純 PyTorch の `CAME` オプティマイザが最も安全な出発点です。
 
 ## 初心者向け CUDA ビルドガイド
 
