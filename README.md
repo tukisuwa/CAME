@@ -11,7 +11,6 @@ This fork extends the original CAME optimizer with experimental **8-bit quantize
 | `came_cuda/` | C++/CUDA extension sources |
 | `blockwise_quantization.py` | Blockwise quantization utilities |
 
-This is **not** the official upstream repository. Treat it as a preview release.
 Guides: [English](README_en.md) | [日本語](README_jp.md)
 
 
