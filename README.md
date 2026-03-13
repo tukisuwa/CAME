@@ -1,6 +1,22 @@
+**Fork status (test2 branch)**
+
+This fork extends the original CAME optimizer with experimental **8-bit quantized variants** for further memory reduction.
+
+| Module | Description |
+|--------|-------------|
+| `CAME` | Pure-PyTorch baseline (unchanged from upstream) |
+| `CAME8bit` | 8-bit entry point — auto-selects CUDA fast path or pure-PyTorch fallback |
+| `CAME8bitFull` | Full-state 8-bit reference implementation for arbitrary parameter shapes |
+| `CAME8bit2D` | Specialized CUDA 2-D fast path |
+| `came_cuda/` | C++/CUDA extension sources |
+| `blockwise_quantization.py` | Blockwise quantization utilities |
+
+This is **not** the official upstream repository. Treat it as a preview release.
+Guides: [English](README_en.md) | [日本語](README_jp.md)
+
+
 <h1 align="center">CAME Optimizer</h1>
 <h3 align="center">ACL 2023 Outstanding Paper Award<br/>Confidence-guided Adaptive Memory Efficient Optimization</h3>
-
 
 This is an official implementation of **CAME** optimizer in the "[Confidence-guided Adaptive Memory Efficient Optimization](https://arxiv.org/abs/2307.02047)". Please cite the paper and star this repo if you find CAME useful. Thanks!
 
