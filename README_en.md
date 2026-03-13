@@ -5,22 +5,17 @@ This document covers installation, CUDA build instructions, usage, and caveats.
 
 ## Installation
 
-There are two ways to use this repository:
+This guide assumes you already cloned this repository locally.
 
-- If you just want to try CAME itself, a standard install is sufficient.
-- If you want to use the CUDA 8-bit paths, additional local build steps are required.
-
-Install from the repository root:
+From the repository root, install with:
 
 ```bash
-pip install .
+pip install -e . --no-build-isolation -v
 ```
 
-Install directly from GitHub:
-
-```bash
-pip install git+https://github.com/tukisuwa/CAME.git@test2
-```
+This is the recommended default for this fork. It keeps the repository on disk,
+builds against the `torch` already present in your environment, and makes local
+rebuilds easier.
 
 
 ## CUDA Build Guide for Beginners
@@ -62,10 +57,11 @@ For example, if `torch.version.cuda` is `12.6`, you need a CUDA 12.x Toolkit.
 
 ### 3. Install the package with CUDA build enabled
 
-If CUDA-enabled PyTorch is already installed in your environment:
+If CUDA-enabled PyTorch is already installed in your environment, install from the
+repository root with:
 
 ```bash
-pip install -e . --no-build-isolation
+pip install -e . --no-build-isolation -v
 ```
 
 Why `--no-build-isolation`:
@@ -73,12 +69,6 @@ Why `--no-build-isolation`:
 - The build needs to reference the existing PyTorch installation in your environment.
 - Without this flag, `pip` builds in an isolated environment where `torch` is not
   available, and the CUDA extension may be silently skipped.
-
-You can also install from GitHub in the same way:
-
-```bash
-pip install git+https://github.com/tukisuwa/CAME.git@test2 --no-build-isolation
-```
 
 > **Note**: When using `--no-build-isolation`, the build dependencies `setuptools` and
 > `wheel` must already be present in your environment. If they are missing, run
@@ -102,11 +92,26 @@ On Windows, if the compiler is not detected, first open one of the following:
 Run the following:
 
 ```bash
+python -c "import importlib.util; print(importlib.util.find_spec('came_pytorch.came_cuda_ext'))"
+```
+
+If this prints `None`, the CUDA extension is not available in the current environment.
+
+You can also verify by importing the extension directly:
+
+```bash
+python -c "import came_pytorch.came_cuda_ext; print('ext ok')"
+```
+
+Note that a check like:
+
+```bash
 python -c "import torch; import came_pytorch; from came_pytorch import CAME8bit; print('cuda available:', torch.cuda.is_available()); print('ok')"
 ```
 
-If the import succeeds, the package itself is correctly installed.
-The CUDA extension is lazily loaded when CUDA-specific code paths are used.
+only proves that PyTorch CUDA is available and that the package can be imported.
+It does **not** prove that `came_cuda_ext` was built. The CUDA extension is lazily loaded when
+CUDA-specific code paths are used.
 
 ### Common mistakes
 
@@ -114,6 +119,7 @@ The CUDA extension is lazily loaded when CUDA-specific code paths are used.
 - Installing the CUDA Toolkit on Windows but not Visual Studio Build Tools
 - Using a CUDA Toolkit from the wrong major version family
 - Assuming `pip install .` alone guarantees the CUDA extension was compiled
+- Assuming `import came_pytorch` or `torch.cuda.is_available()` proves that `came_cuda_ext` was built
 - Trying to use `CAME8bit2D` with CPU tensors or non-2D tensors
 
 If the extension is not pre-built, `came_pytorch.came_cuda` can also attempt a

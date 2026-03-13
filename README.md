@@ -1,6 +1,7 @@
 **Fork status (test2 branch)**
 
 This fork extends the original CAME optimizer with experimental **8-bit quantized variants** for further memory reduction.
+For this fork, the recommended install flow is a local clone plus `pip install -e . --no-build-isolation -v`.
 
 | Module | Description |
 |--------|-------------|
