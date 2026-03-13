@@ -6,7 +6,9 @@ For this fork, the recommended install flow is a local clone plus `pip install -
 | Module | Description |
 |--------|-------------|
 | `CAME` | Pure-PyTorch baseline (unchanged from upstream) |
+| `CAMECUDA` | CUDA fp-state optimizer focused on step speed without 8-bit state compression |
 | `CAME8bit` | 8-bit entry point — auto-selects CUDA fast path or pure-PyTorch fallback |
+| `CAME8bitMemory` | Compact 8-bit mode that minimizes persistent helper buffers |
 | `CAME8bitFull` | Full-state 8-bit reference implementation for arbitrary parameter shapes |
 | `CAME8bit2D` | Specialized CUDA 2-D fast path |
 | `came_cuda/` | C++/CUDA extension sources |
@@ -46,6 +48,24 @@ optimizer = CAME(
     weight_decay=1e-2,
     betas=(0.9, 0.999, 0.9999),
     eps=(1e-30, 1e-16)
+)
+```
+
+```python
+from came_pytorch import CAMECUDA
+optimizer = CAMECUDA(
+    model.parameters(),
+    lr=2e-4,
+    weight_decay=1e-2,
+)
+```
+
+```python
+from came_pytorch import CAME8bitMemory
+optimizer = CAME8bitMemory(
+    model.parameters(),
+    lr=2e-4,
+    weight_decay=1e-2,
 )
 ```
 

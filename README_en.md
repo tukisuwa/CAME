@@ -153,6 +153,30 @@ optimizer = CAME8bit(
 )
 ```
 
+CUDA fp-state optimizer:
+
+```python
+from came_pytorch import CAMECUDA
+
+optimizer = CAMECUDA(
+    model.parameters(),
+    lr=2e-4,
+    weight_decay=1e-2,
+)
+```
+
+Memory-first 8-bit optimizer:
+
+```python
+from came_pytorch import CAME8bitMemory
+
+optimizer = CAME8bitMemory(
+    model.parameters(),
+    lr=2e-4,
+    weight_decay=1e-2,
+)
+```
+
 Force the reference full 8-bit path:
 
 ```python
