@@ -77,8 +77,12 @@ pip install -e . --no-build-isolation
 GitHub から同様にインストールすることもできます:
 
 ```bash
-pip install -e git+https://github.com/tukisuwa/CAME.git@test2#egg=came-pytorch-preview --no-build-isolation
+pip install git+https://github.com/tukisuwa/CAME.git@test2 --no-build-isolation
 ```
+
+> **注意**: `--no-build-isolation` を使用する場合、ビルドに必要な `setuptools` と
+> `wheel` が環境に存在している必要があります。不足している場合は先に
+> `pip install setuptools wheel` を実行してください。
 
 ### 4. ローカル開発用の手動ビルド
 

@@ -77,8 +77,12 @@ Why `--no-build-isolation`:
 You can also install from GitHub in the same way:
 
 ```bash
-pip install -e git+https://github.com/tukisuwa/CAME.git@test2#egg=came-pytorch-preview --no-build-isolation
+pip install git+https://github.com/tukisuwa/CAME.git@test2 --no-build-isolation
 ```
+
+> **Note**: When using `--no-build-isolation`, the build dependencies `setuptools` and
+> `wheel` must already be present in your environment. If they are missing, run
+> `pip install setuptools wheel` first.
 
 ### 4. Manual build for local development
 
