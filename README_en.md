@@ -208,4 +208,3 @@ optimizer = CAME8bit(
 - `CAME8bit2D` is for 2-D parameters on CUDA only.
 - 8-bit state layout is fixed after first use. Parameter resizing is not supported.
 - The public API of the 8-bit variants may change as this fork evolves.
-- This fork's package metadata is intentionally marked as a preview release.

@@ -73,7 +73,7 @@ long_description = (ROOT / "README.md").read_text(encoding="utf-8")
 ext_modules, cmdclass = _get_ext_modules()
 
 setuptools.setup(
-    name="came-pytorch-preview",
+    name="came-pytorch",
     license="MIT",
     version="0.1.3.post1",
     author="Yang Luo and fork contributors",
