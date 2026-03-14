@@ -3,6 +3,20 @@
 基本的なプロジェクト情報については [`README.md`](README.md) を参照してください。
 このドキュメントでは、モードの選び方・インストール・使い方・注意事項を説明します。
 
+## クイックインストール
+
+```bash
+pip install setuptools wheel  # 未インストールの場合
+git clone https://github.com/tukisuwa/CAME.git
+cd CAME
+pip install -e . --no-build-isolation -v
+python -c "import came_pytorch.came_cuda_ext; print('ext ok')"  # CUDA 拡張の確認（任意）
+```
+
+> CUDA 拡張の確認は `CAMECUDA`・`CAME8bit`・`CAME8bitMemory` を使う場合のみ必要です。
+> 純 PyTorch の `CAME` だけを使う場合は不要です。
+> 詳しくは [インストール](#インストール) を参照してください。
+
 ## モード概要
 
 このフォークには 4 つの主要モードがあります。

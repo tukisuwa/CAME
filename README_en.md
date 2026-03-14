@@ -3,6 +3,20 @@
 For basic project information, see [`README.md`](README.md).
 This document covers mode selection, installation, usage, and caveats.
 
+## Quick Install
+
+```bash
+pip install setuptools wheel  # if not already installed
+git clone https://github.com/tukisuwa/CAME.git
+cd CAME
+pip install -e . --no-build-isolation -v
+python -c "import came_pytorch.came_cuda_ext; print('ext ok')"  # verify CUDA extension (optional)
+```
+
+> The CUDA extension check is only needed for `CAMECUDA`, `CAME8bit`, and `CAME8bitMemory`.
+> You can skip it if you only use the pure-PyTorch `CAME`.
+> See [Installation](#installation) for details.
+
 ## Mode Overview
 
 This fork provides four main modes.
