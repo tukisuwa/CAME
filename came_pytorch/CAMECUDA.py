@@ -3,6 +3,11 @@ from __future__ import annotations
 import torch
 
 try:
+    from came_pytorch.came_cuda import came_fp_factored_step as cuda_came_fp_factored_step
+except Exception:
+    cuda_came_fp_factored_step = None
+
+try:
     from came_pytorch.came_cuda import came_full_factored_param_update as cuda_came_full_factored_param_update
 except Exception:
     cuda_came_full_factored_param_update = None
@@ -158,6 +163,34 @@ class CAMECUDA(torch.optim.Optimizer):
         scratch = state["scratch_fp32"]
         row_factor = state["row_factor_fp32"]
         col_factor = state["col_factor_fp32"]
+
+        if cuda_came_fp_factored_step is not None:
+            cuda_came_fp_factored_step(
+                p=p.data,
+                g32=grad_fp32,
+                exp_avg=exp_avg,
+                exp_avg_sq_row=exp_avg_sq_row,
+                exp_avg_sq_col=exp_avg_sq_col,
+                exp_avg_res_row=exp_avg_res_row,
+                exp_avg_res_col=exp_avg_res_col,
+                r_factor=row_factor,
+                c_factor=col_factor,
+                scratch=scratch,
+                reduce_partial=state["reduce_partial"],
+                sum_row_state=state["sum_row_state"],
+                sum_update=state["sum_update"],
+                beta1=beta1,
+                beta2=beta2,
+                beta3=beta3,
+                eps0=eps0,
+                eps1=eps1,
+                lr=lr,
+                clip_threshold=clip_threshold,
+                weight_decay=weight_decay,
+                block_size=256,
+            )
+            return
+
         row_mean = state["row_mean_fp32"]
 
         scratch.copy_(grad_fp32).mul_(grad_fp32).add_(eps0)

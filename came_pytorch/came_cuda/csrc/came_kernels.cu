@@ -368,6 +368,77 @@ __global__ void kFinalizeQuantizedRFactorBatched(
     }
 }
 
+__global__ void kUpdateSqRowFp32(
+    const float* __restrict__ g32,
+    float* __restrict__ exp_avg_sq_row,
+    const float beta2,
+    const float eps0,
+    const int rows,
+    const int cols
+) {
+    const int row = (int)blockIdx.x;
+    if (row >= rows)
+        return;
+
+    float local = 0.0f;
+    for (int col = (int)threadIdx.x; col < cols; col += THREADS) {
+        const float g = g32[row * cols + col];
+        local += (g * g) + eps0;
+    }
+
+    using BlockReduceT = cub::BlockReduce<float, THREADS>;
+    __shared__ typename BlockReduceT::TempStorage tmp;
+    const float row_sum = BlockReduceT(tmp).Sum(local);
+
+    if (threadIdx.x == 0) {
+        const float mean = row_sum / (float)cols;
+        exp_avg_sq_row[row] = (exp_avg_sq_row[row] * beta2) + ((1.0f - beta2) * mean);
+    }
+}
+
+__global__ void kUpdateSqColFinalizeFp32(
+    const float* __restrict__ g32,
+    float* __restrict__ exp_avg_sq_col,
+    float* __restrict__ c_factor,
+    const float beta2,
+    const float eps0,
+    const int rows,
+    const int cols
+) {
+    const int col = (int)blockIdx.x * THREADS + (int)threadIdx.x;
+    const bool valid = col < cols;
+
+    float updated = 0.0f;
+    if (valid) {
+        float local = 0.0f;
+        for (int row = 0; row < rows; ++row) {
+            const float g = g32[row * cols + col];
+            local += (g * g) + eps0;
+        }
+        const float mean = local / (float)rows;
+        updated = (exp_avg_sq_col[col] * beta2) + ((1.0f - beta2) * mean);
+    }
+
+    if (valid) {
+        exp_avg_sq_col[col] = updated;
+        c_factor[col] = rsqrtf(fmaxf(updated, 1e-30f));
+    }
+}
+
+__global__ void kFinalizeRFactorFp32(
+    const float* __restrict__ updated_row,
+    float* __restrict__ factor_out,
+    const float* __restrict__ sum_row_state,
+    const int rows
+) {
+    const int idx = (int)blockIdx.x * THREADS + (int)threadIdx.x;
+    if (idx >= rows)
+        return;
+
+    const float mean = fmaxf(sum_row_state[0] / (float)rows, 1e-30f);
+    factor_out[idx] = rsqrtf(fmaxf(updated_row[idx] / mean, 1e-30f));
+}
+
 template <typename T>
 __global__ void kSumUpdateSq(
     const T* __restrict__ g,
@@ -1109,6 +1180,59 @@ __global__ void kUpdateMeanColQuantizedFinalizeBatched(
         const float inv_absmax = 1.0f / shared_absmax;
         q_out[col_offset + col] = quant_u8(updated, inv_absmax);
         c_factor[col_offset + col] = rsqrtf(fmaxf(updated, 1e-30f));
+    }
+}
+
+__global__ void kUpdateMeanRowFp32(
+    const float* __restrict__ src,
+    float* __restrict__ exp_avg_res_row,
+    const float beta3,
+    const int rows,
+    const int cols
+) {
+    const int row = (int)blockIdx.x;
+    if (row >= rows)
+        return;
+
+    float local = 0.0f;
+    for (int col = (int)threadIdx.x; col < cols; col += THREADS) {
+        local += src[row * cols + col];
+    }
+
+    using BlockReduceT = cub::BlockReduce<float, THREADS>;
+    __shared__ typename BlockReduceT::TempStorage tmp;
+    const float row_sum = BlockReduceT(tmp).Sum(local);
+
+    if (threadIdx.x == 0) {
+        const float mean = row_sum / (float)cols;
+        exp_avg_res_row[row] = (exp_avg_res_row[row] * beta3) + ((1.0f - beta3) * mean);
+    }
+}
+
+__global__ void kUpdateMeanColFinalizeFp32(
+    const float* __restrict__ src,
+    float* __restrict__ exp_avg_res_col,
+    float* __restrict__ c_factor,
+    const float beta3,
+    const int rows,
+    const int cols
+) {
+    const int col = (int)blockIdx.x * THREADS + (int)threadIdx.x;
+    const bool valid = col < cols;
+
+    float updated = 0.0f;
+    if (valid) {
+        float local = 0.0f;
+        for (int row = 0; row < rows; ++row) {
+            local += src[row * cols + col];
+        }
+        const float mean = local / (float)rows;
+        updated = (exp_avg_res_col[col] * beta3) + ((1.0f - beta3) * mean);
+    }
+
+    if (valid) {
+        exp_avg_res_col[col] = updated;
+        c_factor[col] = rsqrtf(fmaxf(updated, 1e-30f));
     }
 }
 
@@ -1926,6 +2050,43 @@ __global__ void kCameFactoredExpAvgResPrepare(
         const int64_t idx = start + offset;
         if (idx < numel) {
             exp_avg_q[idx] = quant_i8(exp_avg_fp32[idx], inv_absmax);
+        }
+    }
+}
+
+__global__ void kCameFactoredExpAvgResPrepareFp32(
+    const float* __restrict__ g32,
+    float* __restrict__ exp_avg,
+    const float* __restrict__ r_factor,
+    const float* __restrict__ c_factor,
+    float* __restrict__ res32,
+    const float* __restrict__ sum_update,
+    const float beta1,
+    const float eps1,
+    const float clip_threshold,
+    const int rows,
+    const int cols,
+    const int block_size
+) {
+    const int block = (int)blockIdx.x;
+    const int64_t start = (int64_t)block * block_size;
+    const int64_t numel = (int64_t)rows * cols;
+    if (start >= numel)
+        return;
+
+    const float rms = sqrtf(sum_update[0] / (float)numel);
+    const float clip = fmaxf(1.0f, rms / clip_threshold);
+
+    for (int offset = (int)threadIdx.x; offset < block_size; offset += THREADS) {
+        const int64_t idx = start + offset;
+        if (idx < numel) {
+            const int row = (int)(idx / cols);
+            const int col = (int)(idx - (int64_t)row * cols);
+            const float u = (g32[idx] * r_factor[row] * c_factor[col]) / clip;
+            const float new_avg = (exp_avg[idx] * beta1) + ((1.0f - beta1) * u);
+            exp_avg[idx] = new_avg;
+            const float diff = u - new_avg;
+            res32[idx] = (diff * diff) + eps1;
         }
     }
 }
@@ -4718,6 +4879,171 @@ void came_full_factored_param_update_cuda(
         kCameFactoredParamUpdate<__nv_bfloat16><<<blocks, THREADS, 0, stream.stream()>>>(
             (__nv_bfloat16*)p.data_ptr(),
             (const float*)exp_avg_fp32.data_ptr(),
+            (const float*)r_factor.data_ptr(),
+            (const float*)c_factor.data_ptr(),
+            (float)lr,
+            (float)weight_decay,
+            rows,
+            cols
+        );
+    }
+}
+
+void came_fp_factored_step_cuda(
+    torch::Tensor p,
+    torch::Tensor g32,
+    torch::Tensor exp_avg,
+    torch::Tensor exp_avg_sq_row,
+    torch::Tensor exp_avg_sq_col,
+    torch::Tensor exp_avg_res_row,
+    torch::Tensor exp_avg_res_col,
+    torch::Tensor r_factor,
+    torch::Tensor c_factor,
+    torch::Tensor scratch,
+    torch::Tensor reduce_partial,
+    torch::Tensor sum_row_state,
+    torch::Tensor sum_update,
+    double beta1,
+    double beta2,
+    double beta3,
+    double eps0,
+    double eps1,
+    double lr,
+    double clip_threshold,
+    double weight_decay,
+    int64_t block_size
+) {
+    const c10::cuda::CUDAGuard device_guard(p.device());
+    auto stream = at::cuda::getCurrentCUDAStream();
+    const int rows = (int)g32.size(0);
+    const int cols = (int)g32.size(1);
+    const int64_t numel = g32.numel();
+    const int row_blocks = (rows + THREADS - 1) / THREADS;
+    const int col_blocks = (cols + THREADS - 1) / THREADS;
+    const int update_blocks = (int)((numel + block_size - 1) / block_size);
+    const int reduce_blocks = (int)((numel + THREADS - 1) / THREADS);
+
+    kUpdateSqRowFp32<<<rows, THREADS, 0, stream.stream()>>>(
+        (const float*)g32.data_ptr(),
+        (float*)exp_avg_sq_row.data_ptr(),
+        (float)beta2,
+        (float)eps0,
+        rows,
+        cols
+    );
+    kReduceVectorPartial<<<row_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)exp_avg_sq_row.data_ptr(),
+        (float*)reduce_partial.data_ptr(),
+        rows
+    );
+    kReducePartialSum<<<1, THREADS, 0, stream.stream()>>>(
+        (const float*)reduce_partial.data_ptr(),
+        (float*)sum_row_state.data_ptr(),
+        row_blocks
+    );
+    kUpdateSqColFinalizeFp32<<<col_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)g32.data_ptr(),
+        (float*)exp_avg_sq_col.data_ptr(),
+        (float*)c_factor.data_ptr(),
+        (float)beta2,
+        (float)eps0,
+        rows,
+        cols
+    );
+    kFinalizeRFactorFp32<<<row_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)exp_avg_sq_row.data_ptr(),
+        (float*)r_factor.data_ptr(),
+        (const float*)sum_row_state.data_ptr(),
+        rows
+    );
+    kSumUpdateSq<float><<<reduce_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)g32.data_ptr(),
+        (const float*)r_factor.data_ptr(),
+        (const float*)c_factor.data_ptr(),
+        (float*)reduce_partial.data_ptr(),
+        (int)numel,
+        rows,
+        cols
+    );
+    kReducePartialSum<<<1, THREADS, 0, stream.stream()>>>(
+        (const float*)reduce_partial.data_ptr(),
+        (float*)sum_update.data_ptr(),
+        reduce_blocks
+    );
+    kCameFactoredExpAvgResPrepareFp32<<<update_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)g32.data_ptr(),
+        (float*)exp_avg.data_ptr(),
+        (const float*)r_factor.data_ptr(),
+        (const float*)c_factor.data_ptr(),
+        (float*)scratch.data_ptr(),
+        (const float*)sum_update.data_ptr(),
+        (float)beta1,
+        (float)eps1,
+        (float)clip_threshold,
+        rows,
+        cols,
+        (int)block_size
+    );
+    kUpdateMeanRowFp32<<<rows, THREADS, 0, stream.stream()>>>(
+        (const float*)scratch.data_ptr(),
+        (float*)exp_avg_res_row.data_ptr(),
+        (float)beta3,
+        rows,
+        cols
+    );
+    kReduceVectorPartial<<<row_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)exp_avg_res_row.data_ptr(),
+        (float*)reduce_partial.data_ptr(),
+        rows
+    );
+    kReducePartialSum<<<1, THREADS, 0, stream.stream()>>>(
+        (const float*)reduce_partial.data_ptr(),
+        (float*)sum_row_state.data_ptr(),
+        row_blocks
+    );
+    kUpdateMeanColFinalizeFp32<<<col_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)scratch.data_ptr(),
+        (float*)exp_avg_res_col.data_ptr(),
+        (float*)c_factor.data_ptr(),
+        (float)beta3,
+        rows,
+        cols
+    );
+    kFinalizeRFactorFp32<<<row_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)exp_avg_res_row.data_ptr(),
+        (float*)r_factor.data_ptr(),
+        (const float*)sum_row_state.data_ptr(),
+        rows
+    );
+
+    const auto dtype = p.scalar_type();
+    const int param_blocks = (int)((numel + THREADS - 1) / THREADS);
+    if (dtype == torch::kFloat32) {
+        kCameFactoredParamUpdate<float><<<param_blocks, THREADS, 0, stream.stream()>>>(
+            (float*)p.data_ptr(),
+            (const float*)exp_avg.data_ptr(),
+            (const float*)r_factor.data_ptr(),
+            (const float*)c_factor.data_ptr(),
+            (float)lr,
+            (float)weight_decay,
+            rows,
+            cols
+        );
+    } else if (dtype == torch::kFloat16) {
+        kCameFactoredParamUpdate<half><<<param_blocks, THREADS, 0, stream.stream()>>>(
+            (half*)p.data_ptr(),
+            (const float*)exp_avg.data_ptr(),
+            (const float*)r_factor.data_ptr(),
+            (const float*)c_factor.data_ptr(),
+            (float)lr,
+            (float)weight_decay,
+            rows,
+            cols
+        );
+    } else {
+        kCameFactoredParamUpdate<__nv_bfloat16><<<param_blocks, THREADS, 0, stream.stream()>>>(
+            (__nv_bfloat16*)p.data_ptr(),
+            (const float*)exp_avg.data_ptr(),
             (const float*)r_factor.data_ptr(),
             (const float*)c_factor.data_ptr(),
             (float)lr,

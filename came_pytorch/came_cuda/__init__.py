@@ -817,6 +817,58 @@ def came_full_factored_param_update(
     )
 
 
+def came_fp_factored_step(
+    *,
+    p: torch.Tensor,
+    g32: torch.Tensor,
+    exp_avg: torch.Tensor,
+    exp_avg_sq_row: torch.Tensor,
+    exp_avg_sq_col: torch.Tensor,
+    exp_avg_res_row: torch.Tensor,
+    exp_avg_res_col: torch.Tensor,
+    r_factor: torch.Tensor,
+    c_factor: torch.Tensor,
+    scratch: torch.Tensor,
+    reduce_partial: torch.Tensor,
+    sum_row_state: torch.Tensor,
+    sum_update: torch.Tensor,
+    beta1: float,
+    beta2: float,
+    beta3: float,
+    eps0: float,
+    eps1: float,
+    lr: float,
+    clip_threshold: float,
+    weight_decay: float,
+    block_size: int,
+) -> None:
+    ext = _get_ext()
+    ext.came_fp_factored_step(
+        p,
+        g32,
+        exp_avg,
+        exp_avg_sq_row,
+        exp_avg_sq_col,
+        exp_avg_res_row,
+        exp_avg_res_col,
+        r_factor,
+        c_factor,
+        scratch,
+        reduce_partial,
+        sum_row_state,
+        sum_update,
+        float(beta1),
+        float(beta2),
+        float(beta3),
+        float(eps0),
+        float(eps1),
+        float(lr),
+        float(clip_threshold),
+        float(weight_decay),
+        int(block_size),
+    )
+
+
 def came_full_factored_param_update_batched(
     *,
     p: torch.Tensor,
