@@ -153,7 +153,8 @@ optimizer = CAME8bit(
 )
 ```
 
-CUDA fp-state optimizer:
+CUDA fp-state optimizer.
+This is the recommended speed-first mode when step time matters most:
 
 ```python
 from came_pytorch import CAMECUDA
@@ -165,7 +166,8 @@ optimizer = CAMECUDA(
 )
 ```
 
-Memory-first 8-bit optimizer:
+Memory-first 8-bit optimizer.
+This mode keeps compact 8-bit state and reuses shared CUDA scratch for common 2D/1D cases:
 
 ```python
 from came_pytorch import CAME8bitMemory
@@ -209,6 +211,8 @@ optimizer = CAME8bit2D(model.parameters(), lr=2e-4, weight_decay=1e-2)
 ## Caveats
 
 - The pure-PyTorch `CAME` is the simplest entry point and requires no CUDA extension.
+- `CAMECUDA` is the recommended high-throughput CUDA mode; expect slightly higher VRAM than compact 8-bit modes.
+- `CAME8bitMemory` is the memory-first experimental mode; it reduces persistent optimizer state overhead but is not the fastest option.
 - Sparse gradients are not supported.
 - `CAME8bit2D` is for 2-D parameters on CUDA only.
 - 8-bit state layout is fixed after first use; parameter resizing is not supported.
