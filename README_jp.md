@@ -123,6 +123,24 @@ python -c "import torch; import came_pytorch; from came_pytorch import CAME8bit;
 拡張がプリビルドされていない場合、`came_pytorch.came_cuda` は `ninja` が利用可能な
 ときに JIT ビルドを試みることもできます。
 
+## 選択の目安
+
+ローカルの `sd-scripts` SDXL LoRA 実行（同一の 300 ステップ設定）で得られた傾向の一例:
+
+| オプティマイザ | 時間 | VRAM |
+|----------------|------|------|
+| `CAME` | `12:01` | `7.2 GB` |
+| `CAMECUDA` | `08:32` | `7.4 GB` |
+| `CAME8bit` | `08:47` | `7.3 GB` |
+| `CAME8bitMemory` | `09:48` | `7.0 GB` |
+
+簡単なガイドとして:
+- `CAMECUDA`: 最速モード
+- `CAME8bit`: バランスモード
+- `CAME8bitMemory`: オプティマイザの常駐 VRAM が最小
+
+これらの数値は環境に依存しますが、このフォークが意図するモードの使い分けに沿っています。
+
 ## 使い方
 
 純 PyTorch CAME:
@@ -145,6 +163,32 @@ optimizer = CAME(
 from came_pytorch import CAME8bit
 
 optimizer = CAME8bit(
+    model.parameters(),
+    lr=2e-4,
+    weight_decay=1e-2,
+)
+```
+
+CUDA fp-state オプティマイザ。
+ステップ時間を最優先する場合の推奨モードです:
+
+```python
+from came_pytorch import CAMECUDA
+
+optimizer = CAMECUDA(
+    model.parameters(),
+    lr=2e-4,
+    weight_decay=1e-2,
+)
+```
+
+メモリ優先の 8bit オプティマイザ。
+コンパクトな 8bit 状態を保持し、一般的な 2D/1D ケースで共有 CUDA スクラッチを再利用します:
+
+```python
+from came_pytorch import CAME8bitMemory
+
+optimizer = CAME8bitMemory(
     model.parameters(),
     lr=2e-4,
     weight_decay=1e-2,
@@ -183,6 +227,8 @@ optimizer = CAME8bit2D(model.parameters(), lr=2e-4, weight_decay=1e-2)
 ## 注意事項
 
 - 純 PyTorch の `CAME` が最も簡単なエントリポイントで、CUDA 拡張は不要です。
+- `CAMECUDA` は推奨の高スループット CUDA モードです。コンパクトな 8bit モードよりも VRAM がやや多くなります。
+- `CAME8bitMemory` はメモリ優先の実験的モードです。オプティマイザの常駐状態のオーバーヘッドを削減しますが、最速ではありません。
 - スパース勾配はサポートされていません。
 - `CAME8bit2D` は CUDA 上の 2D パラメータ専用です。
 - 8bit 状態のレイアウトは初回使用後に固定されるため、パラメータのリサイズは
