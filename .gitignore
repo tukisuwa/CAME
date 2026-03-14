@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.dll
+*.dylib
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+
+# Torch C++/CUDA extensions (common outputs)
+*.pdb
+*.lib
+*.exp
+*.obj
+*.o
+*.cu.o
+
+# VS / Windows
+.vs/
+*.user
+*.suo
+*.log

@@ -1,0 +1,3 @@
+include README.md
+include LICENSE
+recursive-include came_pytorch/came_cuda/csrc *.cpp *.cu

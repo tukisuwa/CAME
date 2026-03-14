@@ -1,8 +1,16 @@
-<h1 align="center">CAME Optimizer</h1>
+This is a fork that adds CUDA-accelerated and 8-bit quantized variants to the original CAME optimizer. It provides multiple modes — `CAMECUDA` for speed, `CAME8bit` for balance, and `CAME8bitMemory` for minimal VRAM — on top of the original pure-PyTorch `CAME`.
+
+- **[English Guide](README_en.md)** — Mode selection, installation, CUDA build, usage
+- **[日本語ガイド](README_jp.md)** — モード選択・インストール・CUDA ビルド・使い方
+
+---
+
+<h1 align="center">CAME Optimizer (Fork)</h1>
 <h3 align="center">ACL 2023 Outstanding Paper Award<br/>Confidence-guided Adaptive Memory Efficient Optimization</h3>
 
+---
 
-This is an official implementation of **CAME** optimizer in the "[Confidence-guided Adaptive Memory Efficient Optimization](https://arxiv.org/abs/2307.02047)". Please cite the paper and star this repo if you find CAME useful. Thanks!
+The original CAME optimizer is described in "[Confidence-guided Adaptive Memory Efficient Optimization](https://arxiv.org/abs/2307.02047)". Please cite the paper and star this repo if you find CAME useful. Thanks!
 
 [Paper](https://arxiv.org/abs/2307.02047) | [Twitter](https://twitter.com/ZangweiZheng/status/1680227732788236289) | [Blog](https://zhengzangw.github.io/blogs/came) | [Pypi Package](https://pypi.org/project/came-pytorch/) | [zhihu](https://zhuanlan.zhihu.com/p/643816029)
 ## Method
