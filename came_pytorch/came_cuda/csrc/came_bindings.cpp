@@ -355,6 +355,41 @@ void came_full_factored_param_update_batched_cuda(
     double weight_decay
 );
 
+void came_full_factored_step_multitensor_same_shape_cuda(
+    torch::Tensor g32,
+    torch::Tensor p_ptrs,
+    torch::Tensor exp_avg_q_ptrs,
+    torch::Tensor exp_avg_absmax_ptrs,
+    torch::Tensor exp_avg_sq_row_q_ptrs,
+    torch::Tensor exp_avg_sq_row_absmax_ptrs,
+    torch::Tensor exp_avg_sq_col_q_ptrs,
+    torch::Tensor exp_avg_sq_col_absmax_ptrs,
+    torch::Tensor exp_avg_res_row_q_ptrs,
+    torch::Tensor exp_avg_res_row_absmax_ptrs,
+    torch::Tensor exp_avg_res_col_q_ptrs,
+    torch::Tensor exp_avg_res_col_absmax_ptrs,
+    torch::Tensor row_factor,
+    torch::Tensor c_factor,
+    torch::Tensor row_absmax_scratch,
+    torch::Tensor reduce_partial,
+    torch::Tensor sum_row_state,
+    torch::Tensor sum_update_slice,
+    torch::Tensor sum_update_total,
+    torch::Tensor sum_update_equiv,
+    torch::Tensor exp_avg_fp32,
+    torch::Tensor res32,
+    torch::ScalarType param_dtype,
+    double beta1,
+    double beta2,
+    double beta3,
+    double eps0,
+    double eps1,
+    double lr,
+    double clip_threshold,
+    double weight_decay,
+    int64_t block_size
+);
+
 void came_full_factored_nd_chunked_step_cuda(
     torch::Tensor p,
     torch::Tensor g32,
@@ -1757,6 +1792,119 @@ static void came_full_factored_param_update_batched(
     );
 }
 
+static void came_full_factored_step_multitensor_same_shape_ptrs(
+    torch::Tensor sample_p,
+    torch::Tensor g32,
+    torch::Tensor p_ptrs,
+    torch::Tensor exp_avg_q_ptrs,
+    torch::Tensor exp_avg_absmax_ptrs,
+    torch::Tensor exp_avg_sq_row_q_ptrs,
+    torch::Tensor exp_avg_sq_row_absmax_ptrs,
+    torch::Tensor exp_avg_sq_col_q_ptrs,
+    torch::Tensor exp_avg_sq_col_absmax_ptrs,
+    torch::Tensor exp_avg_res_row_q_ptrs,
+    torch::Tensor exp_avg_res_row_absmax_ptrs,
+    torch::Tensor exp_avg_res_col_q_ptrs,
+    torch::Tensor exp_avg_res_col_absmax_ptrs,
+    torch::Tensor row_factor,
+    torch::Tensor c_factor,
+    torch::Tensor row_absmax_scratch,
+    torch::Tensor reduce_partial,
+    torch::Tensor sum_row_state,
+    torch::Tensor sum_update_slice,
+    torch::Tensor sum_update_total,
+    torch::Tensor sum_update_equiv,
+    torch::Tensor exp_avg_fp32,
+    torch::Tensor res32,
+    double beta1,
+    double beta2,
+    double beta3,
+    double eps0,
+    double eps1,
+    double lr,
+    double clip_threshold,
+    double weight_decay,
+    int64_t block_size
+) {
+    TORCH_CHECK(sample_p.is_cuda(), "sample_p must be CUDA");
+    TORCH_CHECK(sample_p.dim() == 2, "sample_p must be 2D");
+    TORCH_CHECK(sample_p.is_contiguous(), "sample_p must be contiguous");
+    TORCH_CHECK(
+        sample_p.scalar_type() == torch::kFloat32 || sample_p.scalar_type() == torch::kFloat16 || sample_p.scalar_type() == torch::kBFloat16,
+        "sample_p must be float32/float16/bfloat16"
+    );
+    TORCH_CHECK(g32.is_cuda() && g32.scalar_type() == torch::kFloat32 && g32.dim() == 3 && g32.is_contiguous(), "g32 must be CUDA float32 contiguous 3D");
+    const auto batch = g32.size(0);
+    const auto rows = g32.size(1);
+    const auto cols = g32.size(2);
+    TORCH_CHECK(sample_p.size(0) == rows && sample_p.size(1) == cols, "sample_p shape must match g32 inner shape");
+    const auto device = sample_p.device();
+    const auto check_ptr_tensor = [&](torch::Tensor tensor, const char* name) {
+        TORCH_CHECK(tensor.is_cuda(), name, " must be CUDA");
+        TORCH_CHECK(tensor.device() == device, name, " device mismatch");
+        TORCH_CHECK(tensor.scalar_type() == torch::kInt64, name, " must be int64");
+        TORCH_CHECK(tensor.dim() == 1, name, " must be 1D");
+        TORCH_CHECK(tensor.is_contiguous(), name, " must be contiguous");
+        TORCH_CHECK(tensor.numel() == batch, name, " batch size mismatch");
+    };
+    check_ptr_tensor(p_ptrs, "p_ptrs");
+    check_ptr_tensor(exp_avg_q_ptrs, "exp_avg_q_ptrs");
+    check_ptr_tensor(exp_avg_absmax_ptrs, "exp_avg_absmax_ptrs");
+    check_ptr_tensor(exp_avg_sq_row_q_ptrs, "exp_avg_sq_row_q_ptrs");
+    check_ptr_tensor(exp_avg_sq_row_absmax_ptrs, "exp_avg_sq_row_absmax_ptrs");
+    check_ptr_tensor(exp_avg_sq_col_q_ptrs, "exp_avg_sq_col_q_ptrs");
+    check_ptr_tensor(exp_avg_sq_col_absmax_ptrs, "exp_avg_sq_col_absmax_ptrs");
+    check_ptr_tensor(exp_avg_res_row_q_ptrs, "exp_avg_res_row_q_ptrs");
+    check_ptr_tensor(exp_avg_res_row_absmax_ptrs, "exp_avg_res_row_absmax_ptrs");
+    check_ptr_tensor(exp_avg_res_col_q_ptrs, "exp_avg_res_col_q_ptrs");
+    check_ptr_tensor(exp_avg_res_col_absmax_ptrs, "exp_avg_res_col_absmax_ptrs");
+    TORCH_CHECK(row_factor.is_cuda() && row_factor.scalar_type() == torch::kFloat32 && row_factor.dim() == 2 && row_factor.size(0) == batch && row_factor.size(1) == rows, "row_factor shape mismatch");
+    TORCH_CHECK(c_factor.is_cuda() && c_factor.scalar_type() == torch::kFloat32 && c_factor.dim() == 2 && c_factor.size(0) == batch && c_factor.size(1) == cols, "c_factor shape mismatch");
+    TORCH_CHECK(row_absmax_scratch.is_cuda() && row_absmax_scratch.scalar_type() == torch::kFloat32 && row_absmax_scratch.dim() == 2 && row_absmax_scratch.size(0) == batch, "row_absmax_scratch shape mismatch");
+    TORCH_CHECK(reduce_partial.is_cuda() && reduce_partial.scalar_type() == torch::kFloat32 && reduce_partial.dim() == 2 && reduce_partial.size(0) == batch, "reduce_partial shape mismatch");
+    TORCH_CHECK(sum_row_state.is_cuda() && sum_row_state.scalar_type() == torch::kFloat32 && sum_row_state.dim() == 1 && sum_row_state.size(0) == batch, "sum_row_state shape mismatch");
+    TORCH_CHECK(sum_update_slice.is_cuda() && sum_update_slice.scalar_type() == torch::kFloat32 && sum_update_slice.dim() == 1 && sum_update_slice.size(0) == batch, "sum_update_slice shape mismatch");
+    TORCH_CHECK(sum_update_total.is_cuda() && sum_update_total.scalar_type() == torch::kFloat32 && sum_update_total.numel() == 1, "sum_update_total must be CUDA float32 scalar");
+    TORCH_CHECK(sum_update_equiv.is_cuda() && sum_update_equiv.scalar_type() == torch::kFloat32 && sum_update_equiv.numel() == 1, "sum_update_equiv must be CUDA float32 scalar");
+    TORCH_CHECK(exp_avg_fp32.is_cuda() && exp_avg_fp32.scalar_type() == torch::kFloat32 && exp_avg_fp32.dim() == 3 && exp_avg_fp32.sizes() == g32.sizes(), "exp_avg_fp32 shape mismatch");
+    TORCH_CHECK(res32.is_cuda() && res32.scalar_type() == torch::kFloat32 && res32.dim() == 3 && res32.sizes() == g32.sizes(), "res32 shape mismatch");
+
+    came_full_factored_step_multitensor_same_shape_cuda(
+        g32,
+        p_ptrs,
+        exp_avg_q_ptrs,
+        exp_avg_absmax_ptrs,
+        exp_avg_sq_row_q_ptrs,
+        exp_avg_sq_row_absmax_ptrs,
+        exp_avg_sq_col_q_ptrs,
+        exp_avg_sq_col_absmax_ptrs,
+        exp_avg_res_row_q_ptrs,
+        exp_avg_res_row_absmax_ptrs,
+        exp_avg_res_col_q_ptrs,
+        exp_avg_res_col_absmax_ptrs,
+        row_factor,
+        c_factor,
+        row_absmax_scratch,
+        reduce_partial,
+        sum_row_state,
+        sum_update_slice,
+        sum_update_total,
+        sum_update_equiv,
+        exp_avg_fp32,
+        res32,
+        sample_p.scalar_type(),
+        beta1,
+        beta2,
+        beta3,
+        eps0,
+        eps1,
+        lr,
+        clip_threshold,
+        weight_decay,
+        block_size
+    );
+}
+
 static void came_full_factored_nd_chunked_step(
     torch::Tensor p,
     torch::Tensor g32,
@@ -1899,5 +2047,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("came_full_factored_param_update", &came_full_factored_param_update, "CAME full factored param update (CUDA)");
     m.def("came_fp_factored_step", &came_fp_factored_step, "CAME fp-state factored step (CUDA)");
     m.def("came_full_factored_param_update_batched", &came_full_factored_param_update_batched, "CAME full factored param update batched (CUDA)");
+    m.def("came_full_factored_step_multitensor_same_shape_ptrs", &came_full_factored_step_multitensor_same_shape_ptrs, "CAME full factored same-shape multitensor step ptrs (CUDA)");
     m.def("came_full_factored_nd_chunked_step", &came_full_factored_nd_chunked_step, "CAME full factored ND chunked step (CUDA)");
 }

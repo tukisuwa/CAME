@@ -368,6 +368,153 @@ __global__ void kFinalizeQuantizedRFactorBatched(
     }
 }
 
+template <typename T>
+__global__ void kUpdateSqRowQuantizedMultiTensorSameShape(
+    const T* __restrict__ g,
+    const int64_t* __restrict__ exp_avg_sq_row_q_ptrs,
+    const int64_t* __restrict__ exp_avg_sq_row_absmax_ptrs,
+    float* __restrict__ updated_row,
+    float* __restrict__ next_absmax,
+    const float beta2,
+    const float eps0,
+    const int64_t per_item_numel,
+    const int rows,
+    const int cols,
+    const int row_q_blocks,
+    const int block_size
+) {
+    const int linear_row = (int)blockIdx.x;
+    const int item = linear_row / rows;
+    const int row = linear_row - item * rows;
+    if (row >= rows)
+        return;
+
+    const auto* q_in = reinterpret_cast<const uint8_t*>(exp_avg_sq_row_q_ptrs[item]);
+    const auto* absmax_in = reinterpret_cast<const float*>(exp_avg_sq_row_absmax_ptrs[item]);
+    const int64_t item_offset = (int64_t)item * per_item_numel;
+    const int64_t row_offset = (int64_t)item * rows;
+    const int64_t row_absmax_offset = (int64_t)item * row_q_blocks;
+
+    float local = 0.0f;
+    for (int col = (int)threadIdx.x; col < cols; col += THREADS) {
+        const int64_t idx = item_offset + (int64_t)row * cols + col;
+        const float gv = to_float(g[idx]);
+        local += (gv * gv) + eps0;
+    }
+
+    using BlockReduceT = cub::BlockReduce<float, THREADS>;
+    __shared__ typename BlockReduceT::TempStorage tmp;
+    const float row_sum = BlockReduceT(tmp).Sum(local);
+
+    if (threadIdx.x == 0) {
+        const float mean = row_sum / (float)cols;
+        const int qblock = row / block_size;
+        const float old = dequant_u8(q_in[row], absmax_in[qblock]);
+        const float updated = (old * beta2) + ((1.0f - beta2) * mean);
+        updated_row[row_offset + row] = updated;
+        atomic_max_positive_f32(next_absmax + row_absmax_offset + qblock, updated);
+    }
+}
+
+template <typename T>
+__global__ void kUpdateSqColQuantizedFinalizeMultiTensorSameShape(
+    const T* __restrict__ g,
+    const int64_t* __restrict__ exp_avg_sq_col_q_ptrs,
+    const int64_t* __restrict__ exp_avg_sq_col_absmax_ptrs,
+    float* __restrict__ c_factor,
+    const float beta2,
+    const float eps0,
+    const int64_t per_item_numel,
+    const int rows,
+    const int cols,
+    const int col_q_blocks,
+    const int block_size
+) {
+    const int linear_block = (int)blockIdx.x;
+    const int item = linear_block / col_q_blocks;
+    const int item_block = linear_block - item * col_q_blocks;
+    const int start = item_block * block_size;
+    const int col = start + (int)threadIdx.x;
+    const bool valid = col < cols;
+    auto* q_out = reinterpret_cast<uint8_t*>(exp_avg_sq_col_q_ptrs[item]);
+    auto* absmax_out = reinterpret_cast<float*>(exp_avg_sq_col_absmax_ptrs[item]);
+    const int64_t item_offset = (int64_t)item * per_item_numel;
+    const int64_t col_offset = (int64_t)item * cols;
+
+    float updated = 0.0f;
+    if (valid) {
+        float local = 0.0f;
+        for (int row = 0; row < rows; ++row) {
+            const int64_t idx = item_offset + (int64_t)row * cols + col;
+            const float gv = to_float(g[idx]);
+            local += (gv * gv) + eps0;
+        }
+        const float mean = local / (float)rows;
+        const float old = dequant_u8(q_out[col], absmax_out[item_block]);
+        updated = (old * beta2) + ((1.0f - beta2) * mean);
+    }
+
+    using BlockReduceT = cub::BlockReduce<float, THREADS>;
+    __shared__ typename BlockReduceT::TempStorage tmp;
+    const float block_absmax = BlockReduceT(tmp).Reduce(updated, cub::Max());
+    __shared__ float shared_absmax;
+    if (threadIdx.x == 0) {
+        shared_absmax = (block_absmax > 0.0f) ? block_absmax : 1.0f;
+        absmax_out[item_block] = shared_absmax;
+    }
+    __syncthreads();
+
+    if (valid) {
+        const float inv_absmax = 1.0f / shared_absmax;
+        q_out[col] = quant_u8(updated, inv_absmax);
+        c_factor[col_offset + col] = rsqrtf(fmaxf(updated, 1e-30f));
+    }
+}
+
+__global__ void kFinalizeQuantizedRFactorMultiTensorSameShape(
+    const float* __restrict__ updated,
+    const int64_t* __restrict__ q_ptrs,
+    const int64_t* __restrict__ absmax_ptrs,
+    const float* __restrict__ next_absmax,
+    float* __restrict__ factor_out,
+    const float* __restrict__ sum_vec,
+    const int n,
+    const int blocks_per_item,
+    const int block_size
+) {
+    const int linear_block = (int)blockIdx.x;
+    const int item = linear_block / blocks_per_item;
+    const int item_block = linear_block - item * blocks_per_item;
+    const int start = item_block * block_size;
+    if (start >= n)
+        return;
+
+    auto* q = reinterpret_cast<uint8_t*>(q_ptrs[item]);
+    auto* absmax = reinterpret_cast<float*>(absmax_ptrs[item]);
+    const int64_t item_offset = (int64_t)item * n;
+
+    __shared__ float shared_absmax;
+    __shared__ float shared_mean;
+    if (threadIdx.x == 0) {
+        const float block_absmax = next_absmax[linear_block];
+        shared_absmax = (block_absmax > 0.0f) ? block_absmax : 1.0f;
+        absmax[item_block] = shared_absmax;
+        const float mean = sum_vec[item] / (float)n;
+        shared_mean = (mean > 0.0f) ? mean : 1.0f;
+    }
+    __syncthreads();
+
+    const float inv_absmax = 1.0f / shared_absmax;
+    for (int offset = (int)threadIdx.x; offset < block_size; offset += THREADS) {
+        const int idx = start + offset;
+        if (idx < n) {
+            const float v = updated[item_offset + idx];
+            q[idx] = quant_u8(v, inv_absmax);
+            factor_out[item_offset + idx] = rsqrtf(v / shared_mean);
+        }
+    }
+}
+
 __global__ void kUpdateSqRowFp32(
     const float* __restrict__ g32,
     float* __restrict__ exp_avg_sq_row,
@@ -1179,6 +1326,103 @@ __global__ void kUpdateMeanColQuantizedFinalizeBatched(
     if (valid) {
         const float inv_absmax = 1.0f / shared_absmax;
         q_out[col_offset + col] = quant_u8(updated, inv_absmax);
+        c_factor[col_offset + col] = rsqrtf(fmaxf(updated, 1e-30f));
+    }
+}
+
+template <typename SrcT>
+__global__ void kUpdateMeanRowQuantizedMultiTensorSameShape(
+    const SrcT* __restrict__ src,
+    const int64_t* __restrict__ q_in_ptrs,
+    const int64_t* __restrict__ absmax_in_ptrs,
+    float* __restrict__ updated_row,
+    float* __restrict__ next_absmax,
+    const float beta,
+    const int64_t per_item_numel,
+    const int rows,
+    const int cols,
+    const int row_q_blocks,
+    const int block_size
+) {
+    const int linear_row = (int)blockIdx.x;
+    const int item = linear_row / rows;
+    const int row = linear_row - item * rows;
+    if (row >= rows)
+        return;
+
+    const auto* q_in = reinterpret_cast<const uint8_t*>(q_in_ptrs[item]);
+    const auto* absmax_in = reinterpret_cast<const float*>(absmax_in_ptrs[item]);
+    const int64_t item_offset = (int64_t)item * per_item_numel;
+    const int64_t row_offset = (int64_t)item * rows;
+    const int64_t row_absmax_offset = (int64_t)item * row_q_blocks;
+
+    float local = 0.0f;
+    for (int col = (int)threadIdx.x; col < cols; col += THREADS) {
+        local += to_float(src[item_offset + (int64_t)row * cols + col]);
+    }
+
+    using BlockReduceT = cub::BlockReduce<float, THREADS>;
+    __shared__ typename BlockReduceT::TempStorage tmp;
+    const float row_sum = BlockReduceT(tmp).Sum(local);
+
+    if (threadIdx.x == 0) {
+        const float mean = row_sum / (float)cols;
+        const int qblock = row / block_size;
+        const float old = dequant_u8(q_in[row], absmax_in[qblock]);
+        const float updated = (old * beta) + ((1.0f - beta) * mean);
+        updated_row[row_offset + row] = updated;
+        atomic_max_positive_f32(next_absmax + row_absmax_offset + qblock, updated);
+    }
+}
+
+template <typename SrcT>
+__global__ void kUpdateMeanColQuantizedFinalizeMultiTensorSameShape(
+    const SrcT* __restrict__ src,
+    const int64_t* __restrict__ q_out_ptrs,
+    const int64_t* __restrict__ absmax_out_ptrs,
+    float* __restrict__ c_factor,
+    const float beta,
+    const int64_t per_item_numel,
+    const int rows,
+    const int cols,
+    const int col_q_blocks,
+    const int block_size
+) {
+    const int linear_block = (int)blockIdx.x;
+    const int item = linear_block / col_q_blocks;
+    const int item_block = linear_block - item * col_q_blocks;
+    const int start = item_block * block_size;
+    const int col = start + (int)threadIdx.x;
+    const bool valid = col < cols;
+    auto* q_out = reinterpret_cast<uint8_t*>(q_out_ptrs[item]);
+    auto* absmax_out = reinterpret_cast<float*>(absmax_out_ptrs[item]);
+    const int64_t item_offset = (int64_t)item * per_item_numel;
+    const int64_t col_offset = (int64_t)item * cols;
+
+    float updated = 0.0f;
+    if (valid) {
+        float local = 0.0f;
+        for (int row = 0; row < rows; ++row) {
+            local += to_float(src[item_offset + (int64_t)row * cols + col]);
+        }
+        const float mean = local / (float)rows;
+        const float old = dequant_u8(q_out[col], absmax_out[item_block]);
+        updated = (old * beta) + ((1.0f - beta) * mean);
+    }
+
+    using BlockReduceT = cub::BlockReduce<float, THREADS>;
+    __shared__ typename BlockReduceT::TempStorage tmp;
+    const float block_absmax = BlockReduceT(tmp).Reduce(updated, cub::Max());
+    __shared__ float shared_absmax;
+    if (threadIdx.x == 0) {
+        shared_absmax = (block_absmax > 0.0f) ? block_absmax : 1.0f;
+        absmax_out[item_block] = shared_absmax;
+    }
+    __syncthreads();
+
+    if (valid) {
+        const float inv_absmax = 1.0f / shared_absmax;
+        q_out[col] = quant_u8(updated, inv_absmax);
         c_factor[col_offset + col] = rsqrtf(fmaxf(updated, 1e-30f));
     }
 }
@@ -2161,6 +2405,79 @@ __global__ void kCameFactoredExpAvgResPrepareBatched(
     }
 }
 
+template <typename ExpAvgT, typename ResT>
+__global__ void kCameFactoredExpAvgResPrepareMultiTensorSameShape(
+    const float* __restrict__ g32,
+    const int64_t* __restrict__ exp_avg_q_ptrs,
+    const int64_t* __restrict__ exp_avg_absmax_ptrs,
+    const float* __restrict__ r_factor,
+    const float* __restrict__ c_factor,
+    ExpAvgT* __restrict__ exp_avg_scratch,
+    ResT* __restrict__ res32,
+    const float* __restrict__ sum_update,
+    const float beta1,
+    const float eps1,
+    const float clip_threshold,
+    const int64_t per_item_numel,
+    const int rows,
+    const int cols,
+    const int blocks_per_item,
+    const int block_size
+) {
+    const int linear_block = (int)blockIdx.x;
+    const int item = linear_block / blocks_per_item;
+    const int item_block = linear_block - item * blocks_per_item;
+    const int64_t item_offset = (int64_t)item * per_item_numel;
+    const int64_t start = item_offset + (int64_t)item_block * block_size;
+    const int64_t item_end = item_offset + per_item_numel;
+    if (start >= item_end)
+        return;
+
+    auto* exp_avg_q = reinterpret_cast<int8_t*>(exp_avg_q_ptrs[item]);
+    auto* exp_avg_absmax = reinterpret_cast<float*>(exp_avg_absmax_ptrs[item]);
+    const float old_absmax = exp_avg_absmax[item_block];
+    const float rms = sqrtf(sum_update[0] / (float)per_item_numel);
+    const float clip = fmaxf(1.0f, rms / clip_threshold);
+    const int64_t row_offset = (int64_t)item * rows;
+    const int64_t col_offset = (int64_t)item * cols;
+
+    float local_max = 0.0f;
+    for (int offset = (int)threadIdx.x; offset < block_size; offset += THREADS) {
+        const int64_t idx = start + offset;
+        if (idx < item_end) {
+            const int64_t item_idx = idx - item_offset;
+            const int row = (int)(item_idx / cols);
+            const int col = (int)(item_idx - (int64_t)row * cols);
+            const float u = (g32[idx] * r_factor[row_offset + row] * c_factor[col_offset + col]) / clip;
+            const float old_avg = dequant_i8(exp_avg_q[item_idx], old_absmax);
+            const float new_avg = (old_avg * beta1) + ((1.0f - beta1) * u);
+            exp_avg_scratch[idx] = from_float_t<ExpAvgT>(new_avg);
+            const float diff = u - new_avg;
+            res32[idx] = from_float_t<ResT>((diff * diff) + eps1);
+            local_max = fmaxf(local_max, fabsf(new_avg));
+        }
+    }
+
+    using BlockReduceT = cub::BlockReduce<float, THREADS>;
+    __shared__ typename BlockReduceT::TempStorage tmp;
+    const float block_max = BlockReduceT(tmp).Reduce(local_max, cub::Max());
+    __shared__ float shared_absmax;
+    if (threadIdx.x == 0) {
+        shared_absmax = (block_max > 0.0f) ? block_max : 1.0f;
+        exp_avg_absmax[item_block] = shared_absmax;
+    }
+    __syncthreads();
+
+    const float inv_absmax = 1.0f / shared_absmax;
+    for (int offset = (int)threadIdx.x; offset < block_size; offset += THREADS) {
+        const int64_t idx = start + offset;
+        if (idx < item_end) {
+            const int64_t item_idx = idx - item_offset;
+            exp_avg_q[item_idx] = quant_i8(to_float(exp_avg_scratch[idx]), inv_absmax);
+        }
+    }
+}
+
 template <typename T>
 __global__ void kCameFactoredParamUpdate(
     T* __restrict__ p,
@@ -2219,6 +2536,41 @@ __global__ void kCameFactoredParamUpdateBatched(
         * c_factor[(int64_t)item * cols + col]
     );
     p[idx] = from_float_t<T>(p_val);
+}
+
+template <typename T, typename ExpAvgT>
+__global__ void kCameFactoredParamUpdateMultiTensorSameShape(
+    const int64_t* __restrict__ p_ptrs,
+    const ExpAvgT* __restrict__ exp_avg_scratch,
+    const float* __restrict__ r_factor,
+    const float* __restrict__ c_factor,
+    const float lr,
+    const float weight_decay,
+    const int batch,
+    const int64_t per_item_numel,
+    const int rows,
+    const int cols
+) {
+    const int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const int64_t total_numel = (int64_t)batch * per_item_numel;
+    if (idx >= total_numel)
+        return;
+
+    const int item = (int)(idx / per_item_numel);
+    const int64_t item_idx = idx - (int64_t)item * per_item_numel;
+    const int row = (int)(item_idx / cols);
+    const int col = (int)(item_idx - (int64_t)row * cols);
+    auto* p = reinterpret_cast<T*>(p_ptrs[item]);
+    float p_val = to_float(p[item_idx]);
+    if (weight_decay != 0.0f) {
+        p_val -= weight_decay * lr * p_val;
+    }
+    p_val -= lr * (
+        to_float(exp_avg_scratch[idx])
+        * r_factor[(int64_t)item * rows + row]
+        * c_factor[(int64_t)item * cols + col]
+    );
+    p[item_idx] = from_float_t<T>(p_val);
 }
 
 
@@ -5102,6 +5454,239 @@ void came_full_factored_param_update_batched_cuda(
             (__nv_bfloat16*)p.data_ptr(),
             (const float*)exp_avg_fp32.data_ptr(),
             (const float*)r_factor.data_ptr(),
+            (const float*)c_factor.data_ptr(),
+            (float)lr,
+            (float)weight_decay,
+            batch,
+            per_item_numel,
+            rows,
+            cols
+        );
+    }
+}
+
+void came_full_factored_step_multitensor_same_shape_cuda(
+    torch::Tensor g32,
+    torch::Tensor p_ptrs,
+    torch::Tensor exp_avg_q_ptrs,
+    torch::Tensor exp_avg_absmax_ptrs,
+    torch::Tensor exp_avg_sq_row_q_ptrs,
+    torch::Tensor exp_avg_sq_row_absmax_ptrs,
+    torch::Tensor exp_avg_sq_col_q_ptrs,
+    torch::Tensor exp_avg_sq_col_absmax_ptrs,
+    torch::Tensor exp_avg_res_row_q_ptrs,
+    torch::Tensor exp_avg_res_row_absmax_ptrs,
+    torch::Tensor exp_avg_res_col_q_ptrs,
+    torch::Tensor exp_avg_res_col_absmax_ptrs,
+    torch::Tensor row_factor,
+    torch::Tensor c_factor,
+    torch::Tensor row_absmax_scratch,
+    torch::Tensor reduce_partial,
+    torch::Tensor sum_row_state,
+    torch::Tensor sum_update_slice,
+    torch::Tensor sum_update_total,
+    torch::Tensor sum_update_equiv,
+    torch::Tensor exp_avg_fp32,
+    torch::Tensor res32,
+    torch::ScalarType param_dtype,
+    double beta1,
+    double beta2,
+    double beta3,
+    double eps0,
+    double eps1,
+    double lr,
+    double clip_threshold,
+    double weight_decay,
+    int64_t block_size
+) {
+    const c10::cuda::CUDAGuard device_guard(g32.device());
+    auto stream = at::cuda::getCurrentCUDAStream();
+    const int batch = (int)g32.size(0);
+    const int rows = (int)g32.size(1);
+    const int cols = (int)g32.size(2);
+    const int64_t per_item_numel = (int64_t)rows * cols;
+    const int row_blocks = (rows + THREADS - 1) / THREADS;
+    const int col_q_blocks = (cols + (int)block_size - 1) / (int)block_size;
+    const int row_q_blocks = (rows + (int)block_size - 1) / (int)block_size;
+    const int update_blocks = (int)((per_item_numel + THREADS - 1) / THREADS);
+    const int total_update_blocks = batch * update_blocks;
+
+    cudaMemsetAsync(row_absmax_scratch.data_ptr(), 0, row_absmax_scratch.numel() * sizeof(float), stream.stream());
+    kUpdateSqRowQuantizedMultiTensorSameShape<float><<<batch * rows, THREADS, 0, stream.stream()>>>(
+        (const float*)g32.data_ptr(),
+        (const int64_t*)exp_avg_sq_row_q_ptrs.data_ptr(),
+        (const int64_t*)exp_avg_sq_row_absmax_ptrs.data_ptr(),
+        (float*)row_factor.data_ptr(),
+        (float*)row_absmax_scratch.data_ptr(),
+        (float)beta2,
+        (float)eps0,
+        per_item_numel,
+        rows,
+        cols,
+        row_q_blocks,
+        (int)block_size
+    );
+    kReduceVectorPartialBatched<<<batch * row_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)row_factor.data_ptr(),
+        (float*)reduce_partial.data_ptr(),
+        rows,
+        row_blocks
+    );
+    kReducePartialSumBatched<<<batch, THREADS, 0, stream.stream()>>>(
+        (const float*)reduce_partial.data_ptr(),
+        (float*)sum_row_state.data_ptr(),
+        row_blocks
+    );
+    kUpdateSqColQuantizedFinalizeMultiTensorSameShape<float><<<batch * col_q_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)g32.data_ptr(),
+        (const int64_t*)exp_avg_sq_col_q_ptrs.data_ptr(),
+        (const int64_t*)exp_avg_sq_col_absmax_ptrs.data_ptr(),
+        (float*)c_factor.data_ptr(),
+        (float)beta2,
+        (float)eps0,
+        per_item_numel,
+        rows,
+        cols,
+        col_q_blocks,
+        (int)block_size
+    );
+    kFinalizeQuantizedRFactorMultiTensorSameShape<<<batch * row_q_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)row_factor.data_ptr(),
+        (const int64_t*)exp_avg_sq_row_q_ptrs.data_ptr(),
+        (const int64_t*)exp_avg_sq_row_absmax_ptrs.data_ptr(),
+        (const float*)row_absmax_scratch.data_ptr(),
+        (float*)row_factor.data_ptr(),
+        (const float*)sum_row_state.data_ptr(),
+        rows,
+        row_q_blocks,
+        (int)block_size
+    );
+    kSumUpdateSqBatched<float><<<total_update_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)g32.data_ptr(),
+        (const float*)row_factor.data_ptr(),
+        (const float*)c_factor.data_ptr(),
+        (float*)reduce_partial.data_ptr(),
+        per_item_numel,
+        rows,
+        cols,
+        update_blocks
+    );
+    kReducePartialSumBatched<<<batch, THREADS, 0, stream.stream()>>>(
+        (const float*)reduce_partial.data_ptr(),
+        (float*)sum_update_slice.data_ptr(),
+        update_blocks
+    );
+    kReducePartialSum<<<1, THREADS, 0, stream.stream()>>>(
+        (const float*)sum_update_slice.data_ptr(),
+        (float*)sum_update_total.data_ptr(),
+        batch
+    );
+    kStoreScaledScalar<<<1, 1, 0, stream.stream()>>>(
+        (const float*)sum_update_total.data_ptr(),
+        (float*)sum_update_equiv.data_ptr(),
+        (float)batch
+    );
+
+    kCameFactoredExpAvgResPrepareMultiTensorSameShape<float, float><<<batch * ((per_item_numel + block_size - 1) / block_size), THREADS, 0, stream.stream()>>>(
+        (const float*)g32.data_ptr(),
+        (const int64_t*)exp_avg_q_ptrs.data_ptr(),
+        (const int64_t*)exp_avg_absmax_ptrs.data_ptr(),
+        (const float*)row_factor.data_ptr(),
+        (const float*)c_factor.data_ptr(),
+        (float*)exp_avg_fp32.data_ptr(),
+        (float*)res32.data_ptr(),
+        (const float*)sum_update_equiv.data_ptr(),
+        (float)beta1,
+        (float)eps1,
+        (float)clip_threshold,
+        per_item_numel,
+        rows,
+        cols,
+        (int)((per_item_numel + block_size - 1) / block_size),
+        (int)block_size
+    );
+
+    cudaMemsetAsync(row_absmax_scratch.data_ptr(), 0, row_absmax_scratch.numel() * sizeof(float), stream.stream());
+    kUpdateMeanRowQuantizedMultiTensorSameShape<float><<<batch * rows, THREADS, 0, stream.stream()>>>(
+        (const float*)res32.data_ptr(),
+        (const int64_t*)exp_avg_res_row_q_ptrs.data_ptr(),
+        (const int64_t*)exp_avg_res_row_absmax_ptrs.data_ptr(),
+        (float*)row_factor.data_ptr(),
+        (float*)row_absmax_scratch.data_ptr(),
+        (float)beta3,
+        per_item_numel,
+        rows,
+        cols,
+        row_q_blocks,
+        (int)block_size
+    );
+    kReduceVectorPartialBatched<<<batch * row_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)row_factor.data_ptr(),
+        (float*)reduce_partial.data_ptr(),
+        rows,
+        row_blocks
+    );
+    kReducePartialSumBatched<<<batch, THREADS, 0, stream.stream()>>>(
+        (const float*)reduce_partial.data_ptr(),
+        (float*)sum_row_state.data_ptr(),
+        row_blocks
+    );
+    kUpdateMeanColQuantizedFinalizeMultiTensorSameShape<float><<<batch * col_q_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)res32.data_ptr(),
+        (const int64_t*)exp_avg_res_col_q_ptrs.data_ptr(),
+        (const int64_t*)exp_avg_res_col_absmax_ptrs.data_ptr(),
+        (float*)c_factor.data_ptr(),
+        (float)beta3,
+        per_item_numel,
+        rows,
+        cols,
+        col_q_blocks,
+        (int)block_size
+    );
+    kFinalizeQuantizedRFactorMultiTensorSameShape<<<batch * row_q_blocks, THREADS, 0, stream.stream()>>>(
+        (const float*)row_factor.data_ptr(),
+        (const int64_t*)exp_avg_res_row_q_ptrs.data_ptr(),
+        (const int64_t*)exp_avg_res_row_absmax_ptrs.data_ptr(),
+        (const float*)row_absmax_scratch.data_ptr(),
+        (float*)row_factor.data_ptr(),
+        (const float*)sum_row_state.data_ptr(),
+        rows,
+        row_q_blocks,
+        (int)block_size
+    );
+
+    const int param_blocks = (int)(((int64_t)batch * per_item_numel + THREADS - 1) / THREADS);
+    if (param_dtype == torch::kFloat32) {
+        kCameFactoredParamUpdateMultiTensorSameShape<float, float><<<param_blocks, THREADS, 0, stream.stream()>>>(
+            (const int64_t*)p_ptrs.data_ptr(),
+            (const float*)exp_avg_fp32.data_ptr(),
+            (const float*)row_factor.data_ptr(),
+            (const float*)c_factor.data_ptr(),
+            (float)lr,
+            (float)weight_decay,
+            batch,
+            per_item_numel,
+            rows,
+            cols
+        );
+    } else if (param_dtype == torch::kFloat16) {
+        kCameFactoredParamUpdateMultiTensorSameShape<half, float><<<param_blocks, THREADS, 0, stream.stream()>>>(
+            (const int64_t*)p_ptrs.data_ptr(),
+            (const float*)exp_avg_fp32.data_ptr(),
+            (const float*)row_factor.data_ptr(),
+            (const float*)c_factor.data_ptr(),
+            (float)lr,
+            (float)weight_decay,
+            batch,
+            per_item_numel,
+            rows,
+            cols
+        );
+    } else {
+        kCameFactoredParamUpdateMultiTensorSameShape<__nv_bfloat16, float><<<param_blocks, THREADS, 0, stream.stream()>>>(
+            (const int64_t*)p_ptrs.data_ptr(),
+            (const float*)exp_avg_fp32.data_ptr(),
+            (const float*)row_factor.data_ptr(),
             (const float*)c_factor.data_ptr(),
             (float)lr,
             (float)weight_decay,
