@@ -1,133 +1,109 @@
 # CAME Fork — English Guide
 
 For basic project information, see [`README.md`](README.md).
-This document covers installation, CUDA build instructions, usage, and caveats.
+This document covers mode selection, installation, usage, and caveats.
+
+## Mode Overview
+
+This fork provides four main modes.
+Choose the one that fits your goal.
+
+| Mode | Description | CUDA Extension |
+|------|-------------|----------------|
+| `CAME` | Pure PyTorch implementation. Simplest option | Not required |
+| `CAMECUDA` | Accelerated with CUDA kernels. **Best for speed** | Required |
+| `CAME8bit` | 8-bit quantization balancing speed and VRAM | Required |
+| `CAME8bitMemory` | 8-bit state + shared scratch for **minimal VRAM** | Required |
+
+### Which one should I use?
+
+Measured on a local `sd-scripts` SDXL LoRA run (same 300-step setup):
+
+| Mode | Time | VRAM |
+|------|------|------|
+| `CAME` | `12:01` | `6.0 GB` |
+| `CAMECUDA` | `08:32` | `6.2 GB` |
+| `CAME8bit` | `08:47` | `6.1 GB` |
+| `CAME8bitMemory` | `09:48` | `5.8 GB` |
+
+- Maximum speed → `CAMECUDA`
+- Balance of speed and VRAM → `CAME8bit`
+- Minimize VRAM usage → `CAME8bitMemory`
+- No CUDA extension needed → `CAME`
+
+Numbers are environment-dependent but reflect the intended mode split.
 
 ## Installation
 
 This guide assumes you already cloned this repository locally.
-
 From the repository root, install with:
 
 ```bash
 pip install -e . --no-build-isolation -v
 ```
 
-This is the recommended default for this fork. It keeps the repository on disk,
-builds against the `torch` already present in your environment, and makes local
-rebuilds easier.
+The `--no-build-isolation` flag lets the build reference the `torch` already in your environment.
 
+> **Note**: `setuptools` and `wheel` must be present in your environment.
+> If missing, run `pip install setuptools wheel` first.
 
-## CUDA Build Guide for Beginners
+### Building the CUDA Extension (required for all modes except CAME)
 
-This section is only relevant if you want to use `CAME8bit`, `CAME8bitFull`, or `CAME8bit2D`
-with CUDA support.
+`CAMECUDA`, `CAME8bit`, and `CAME8bitMemory` require the CUDA extension.
+If you only need the pure-PyTorch `CAME`, you can skip this section.
 
-### 1. Check that PyTorch supports CUDA
+#### Prerequisites
 
-Run the following:
+- NVIDIA GPU
+- CUDA-enabled PyTorch
+- CUDA Toolkit (must match PyTorch's CUDA major version — e.g. if `torch.version.cuda` is `12.6`, use a CUDA 12.x Toolkit)
+- C++ compiler (on Windows: Visual Studio 2022 Build Tools)
+
+#### Check PyTorch CUDA support
 
 ```bash
 python -c "import torch; print('torch:', torch.__version__); print('torch.version.cuda:', torch.version.cuda); print('cuda available:', torch.cuda.is_available())"
 ```
 
-How to read the output:
+- `torch.version.cuda` is `None` → You have CPU-only PyTorch. Reinstall with CUDA support.
+- `torch.cuda.is_available()` is `False` → Check your GPU driver and CUDA setup.
 
-- If `torch.version.cuda` is `None`, you have a CPU-only PyTorch installation.
-- If `torch.cuda.is_available()` is `False`, PyTorch cannot currently use a GPU.
-- If both are OK, you can proceed to building the extension.
+#### Build
 
-### 2. Understand the requirements
+The install command above (`pip install -e . --no-build-isolation -v`) automatically builds the CUDA extension when CUDA-enabled PyTorch is present.
 
-Building the CUDA extension generally requires:
-
-- An NVIDIA GPU
-- A CUDA-enabled PyTorch installation
-- The CUDA Toolkit
-- A C++ compiler
-
-Windows prerequisites:
-
-- Visual Studio 2022 Build Tools
-- NVIDIA CUDA Toolkit
-- CUDA-enabled PyTorch
-
-The CUDA Toolkit must match **the CUDA major version of your PyTorch**.
-For example, if `torch.version.cuda` is `12.6`, you need a CUDA 12.x Toolkit.
-
-### 3. Install the package with CUDA build enabled
-
-If CUDA-enabled PyTorch is already installed in your environment, install from the
-repository root with:
-
-```bash
-pip install -e . --no-build-isolation -v
-```
-
-Why `--no-build-isolation`:
-
-- The build needs to reference the existing PyTorch installation in your environment.
-- Without this flag, `pip` builds in an isolated environment where `torch` is not
-  available, and the CUDA extension may be silently skipped.
-
-> **Note**: When using `--no-build-isolation`, the build dependencies `setuptools` and
-> `wheel` must already be present in your environment. If they are missing, run
-> `pip install setuptools wheel` first.
-
-### 4. Manual build for local development
-
-To explicitly build the extension from the repository root:
+To build manually:
 
 ```bat
 python setup.py build_ext --inplace
 ```
 
-On Windows, if the compiler is not detected, first open one of the following:
+On Windows, if the compiler is not detected, first open `x64 Native Tools Command Prompt for VS 2022` or run `vcvars64.bat`.
 
-- `x64 Native Tools Command Prompt for VS 2022`
-- Or run `vcvars64.bat` from Visual Studio Build Tools before running the command
-
-### 5. Verify that the extension is available
-
-Run the following:
-
-```bash
-python -c "import importlib.util; print(importlib.util.find_spec('came_pytorch.came_cuda_ext'))"
-```
-
-If this prints `None`, the CUDA extension is not available in the current environment.
-
-You can also verify by importing the extension directly:
+#### Verify the CUDA extension was built
 
 ```bash
 python -c "import came_pytorch.came_cuda_ext; print('ext ok')"
 ```
 
-Note that a check like:
+If this raises an error or `ModuleNotFoundError`, the extension was not built.
 
-```bash
-python -c "import torch; import came_pytorch; from came_pytorch import CAME8bit; print('cuda available:', torch.cuda.is_available()); print('ok')"
-```
+> **Note**: A successful `import came_pytorch` does not guarantee `came_cuda_ext` was built.
+> The CUDA extension is lazily loaded only when CUDA-specific code paths are used.
 
-only proves that PyTorch CUDA is available and that the package can be imported.
-It does **not** prove that `came_cuda_ext` was built. The CUDA extension is lazily loaded when
-CUDA-specific code paths are used.
+If the extension is not pre-built, a JIT build will be attempted when `ninja` is available.
 
-### Common mistakes
+#### Common mistakes
 
-- Installing CPU-only PyTorch and expecting the CUDA build to work
-- Installing the CUDA Toolkit on Windows but not Visual Studio Build Tools
-- Using a CUDA Toolkit from the wrong major version family
-- Assuming `pip install .` alone guarantees the CUDA extension was compiled
-- Assuming `import came_pytorch` or `torch.cuda.is_available()` proves that `came_cuda_ext` was built
-- Trying to use `CAME8bit2D` with CPU tensors or non-2D tensors
-
-If the extension is not pre-built, `came_pytorch.came_cuda` can also attempt a
-JIT build when `ninja` is available.
+- Using CPU-only PyTorch and expecting the CUDA build to work
+- Installing CUDA Toolkit but not Visual Studio Build Tools (Windows)
+- Mismatched CUDA Toolkit and PyTorch major versions
 
 ## Usage
 
-Pure-PyTorch CAME:
+### Basic Modes
+
+**CAME** (pure PyTorch, no CUDA extension required):
 
 ```python
 from came_pytorch import CAME
@@ -141,38 +117,7 @@ optimizer = CAME(
 )
 ```
 
-## Example Selection Trend
-
-One local `sd-scripts` SDXL LoRA run with the same 300-step setup produced this trend:
-
-| Optimizer | Time | VRAM |
-|-----------|------|------|
-| `CAME` | `12:01` | `7.2 GB` |
-| `CAMECUDA` | `08:32` | `7.4 GB` |
-| `CAME8bit` | `08:47` | `7.3 GB` |
-| `CAME8bitMemory` | `09:48` | `7.0 GB` |
-
-Use it as a simple guide:
-- `CAMECUDA`: fastest mode
-- `CAME8bit`: balanced mode
-- `CAME8bitMemory`: lowest persistent optimizer VRAM
-
-These numbers are environment-dependent, but they match the intended mode split of this fork.
-
-Single-entry 8-bit optimizer:
-
-```python
-from came_pytorch import CAME8bit
-
-optimizer = CAME8bit(
-    model.parameters(),
-    lr=2e-4,
-    weight_decay=1e-2,
-)
-```
-
-CUDA fp-state optimizer.
-This is the recommended speed-first mode when step time matters most:
+**CAMECUDA** (speed-first):
 
 ```python
 from came_pytorch import CAMECUDA
@@ -184,8 +129,19 @@ optimizer = CAMECUDA(
 )
 ```
 
-Memory-first 8-bit optimizer.
-This mode keeps compact 8-bit state and reuses shared CUDA scratch for common 2D/1D cases:
+**CAME8bit** (balanced speed and VRAM):
+
+```python
+from came_pytorch import CAME8bit
+
+optimizer = CAME8bit(
+    model.parameters(),
+    lr=2e-4,
+    weight_decay=1e-2,
+)
+```
+
+**CAME8bitMemory** (minimal VRAM):
 
 ```python
 from came_pytorch import CAME8bitMemory
@@ -197,11 +153,33 @@ optimizer = CAME8bitMemory(
 )
 ```
 
-Force the reference full 8-bit path:
+### Advanced Options
+
+The basic modes above are sufficient for most use cases.
+The following variants are for specific needs.
+
+**CAME8bitFull** — Directly use the underlying implementation of `CAME8bit`.
+`CAME8bit` delegates to this class internally; using `CAME8bit` is normally sufficient:
 
 ```python
-from came_pytorch import CAME8bit
+from came_pytorch import CAME8bitFull
 
+optimizer = CAME8bitFull(model.parameters(), lr=2e-4, weight_decay=1e-2)
+```
+
+**CAME8bit2D** — CUDA fast path for 2-D parameters only.
+Only works with 2-D CUDA tensors:
+
+```python
+from came_pytorch import CAME8bit2D
+
+optimizer = CAME8bit2D(model.parameters(), lr=2e-4, weight_decay=1e-2)
+```
+
+**Disable CUDA fast path** — Force `CAME8bit` to use the reference implementation
+(`CAME8bitFull`) instead of the CUDA fast path:
+
+```python
 optimizer = CAME8bit(
     model.parameters(),
     lr=2e-4,
@@ -210,29 +188,10 @@ optimizer = CAME8bit(
 )
 ```
 
-Explicitly use the full-state 8-bit implementation:
-
-```python
-from came_pytorch import CAME8bitFull
-
-optimizer = CAME8bitFull(model.parameters(), lr=2e-4, weight_decay=1e-2)
-```
-
-Use the CUDA-only 2-D fast path:
-
-```python
-from came_pytorch import CAME8bit2D
-
-optimizer = CAME8bit2D(model.parameters(), lr=2e-4, weight_decay=1e-2)
-```
-
 ## Caveats
 
-- The pure-PyTorch `CAME` is the simplest entry point and requires no CUDA extension.
-- `CAMECUDA` is the recommended high-throughput CUDA mode; expect slightly higher VRAM than compact 8-bit modes.
-- `CAME8bitMemory` is the memory-first experimental mode; it reduces persistent optimizer state overhead but is not the fastest option.
 - Sparse gradients are not supported.
 - `CAME8bit2D` is for 2-D parameters on CUDA only.
-- 8-bit state layout is fixed after first use; parameter resizing is not supported.
+- 8-bit state layout is fixed after first use. Parameter resizing is not supported.
 - The public API of the 8-bit variants may change as this fork evolves.
 - This fork's package metadata is intentionally marked as a preview release.

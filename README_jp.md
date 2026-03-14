@@ -1,149 +1,109 @@
 # CAME フォーク — 日本語ガイド
 
 基本的なプロジェクト情報については [`README.md`](README.md) を参照してください。
-このドキュメントでは、インストール手順・CUDA ビルド・使い方・注意事項を説明します。
+このドキュメントでは、モードの選び方・インストール・使い方・注意事項を説明します。
+
+## モード概要
+
+このフォークには 4 つの主要モードがあります。
+目的に応じて使い分けてください。
+
+| モード | 特徴 | CUDA 拡張 |
+|--------|------|-----------|
+| `CAME` | 純 PyTorch 実装。最もシンプル | 不要 |
+| `CAMECUDA` | CUDA カーネルで高速化。**速度重視ならこれ** | 必要 |
+| `CAME8bit` | 8bit 量子化で速度と VRAM のバランスを取る | 必要 |
+| `CAME8bitMemory` | 8bit 状態 + 共有スクラッチで **VRAM を最小化** | 必要 |
+
+### どれを選ぶ？
+
+`sd-scripts` SDXL LoRA（同一 300 ステップ設定）での実測例:
+
+| モード | 時間 | VRAM |
+|--------|------|------|
+| `CAME` | `12:01` | `6.0 GB` |
+| `CAMECUDA` | `08:32` | `6.2 GB` |
+| `CAME8bit` | `08:47` | `6.1 GB` |
+| `CAME8bitMemory` | `09:48` | `5.8 GB` |
+
+- とにかく速くしたい → `CAMECUDA`
+- 速度と VRAM のバランス → `CAME8bit`
+- VRAM を最小限に抑えたい → `CAME8bitMemory`
+- CUDA 拡張なしで使いたい → `CAME`
+
+数値は環境に依存しますが、傾向の参考にしてください。
 
 ## インストール
 
-このガイドは、このリポジトリをローカルに clone 済みであることを前提にしています。
-
+リポジトリを clone 済みであることを前提とします。
 リポジトリルートで次を実行してください:
 
 ```bash
 pip install -e . --no-build-isolation -v
 ```
 
-このフォークでは、これを既定のインストール手順として推奨します。手元の環境にある
-`torch` を参照してビルドでき、ローカルでの再ビルドもしやすくなります。
+手元の環境の `torch` を参照してビルドするため、`--no-build-isolation` を付けています。
 
+> **注意**: `setuptools` と `wheel` が環境に必要です。
+> 不足している場合は先に `pip install setuptools wheel` を実行してください。
 
-## 初心者向け CUDA ビルドガイド
+### CUDA 拡張のビルド（CAME 以外を使う場合）
 
-このセクションは、`CAME8bit`、`CAME8bitFull`、`CAME8bit2D` を
-CUDA サポート付きで使いたい場合にのみ参照してください。
+`CAMECUDA`・`CAME8bit`・`CAME8bitMemory` を使うには CUDA 拡張のビルドが必要です。
+純 PyTorch の `CAME` だけを使う場合、このセクションは飛ばして構いません。
 
-### 1. PyTorch が CUDA をサポートしているか確認する
+#### 前提条件
 
-以下を実行してください:
+- NVIDIA GPU
+- CUDA 対応の PyTorch
+- CUDA Toolkit（PyTorch の CUDA メジャーバージョンと一致させること。例: `torch.version.cuda` が `12.6` なら CUDA 12.x Toolkit）
+- C++ コンパイラ（Windows では Visual Studio 2022 Build Tools）
+
+#### PyTorch の CUDA 対応を確認する
 
 ```bash
 python -c "import torch; print('torch:', torch.__version__); print('torch.version.cuda:', torch.version.cuda); print('cuda available:', torch.cuda.is_available())"
 ```
 
-結果の読み方:
+- `torch.version.cuda` が `None` → CPU 専用の PyTorch です。CUDA 対応版を再インストールしてください。
+- `torch.cuda.is_available()` が `False` → GPU ドライバや CUDA の設定を確認してください。
 
-- `torch.version.cuda` が `None` の場合、CPU 専用の PyTorch がインストールされています。
-- `torch.cuda.is_available()` が `False` の場合、PyTorch は現在 GPU を使用できません。
-- 両方とも正常であれば、拡張のビルドに進めます。
+#### ビルドの実行
 
-### 2. 必要なものを理解する
+上記のインストールコマンド（`pip install -e . --no-build-isolation -v`）を CUDA 対応 PyTorch がある環境で実行すれば、CUDA 拡張も自動的にビルドされます。
 
-CUDA 拡張のビルドには一般的に以下が必要です:
-
-- NVIDIA GPU
-- CUDA 対応の PyTorch インストール
-- CUDA Toolkit のインストール
-- C++ コンパイラ
-
-Windows での前提条件:
-
-- Visual Studio 2022 Build Tools
-- NVIDIA CUDA Toolkit
-- CUDA 対応の PyTorch
-
-CUDA Toolkit は **PyTorch の CUDA メジャーバージョン** と一致させる必要があります。
-例: `torch.version.cuda` が `12.6` の場合、CUDA 12.x Toolkit が正しいファミリーです。
-
-### 3. CUDA ビルドを有効にしてパッケージをインストールする
-
-CUDA 対応の PyTorch が現在の環境にインストール済みであれば、リポジトリルートで
-次を実行してください:
-
-```bash
-pip install -e . --no-build-isolation -v
-```
-
-`--no-build-isolation` を使う理由:
-
-- ビルド時に、環境内の既存の PyTorch インストールを参照する必要があります。
-- これがないと、`pip` は `torch` が利用できない隔離環境でビルドを行い、
-  CUDA 拡張がスキップされる可能性があります。
-
-> **注意**: `--no-build-isolation` を使用する場合、ビルドに必要な `setuptools` と
-> `wheel` が環境に存在している必要があります。不足している場合は先に
-> `pip install setuptools wheel` を実行してください。
-
-### 4. ローカル開発用の手動ビルド
-
-リポジトリルートから拡張を明示的にビルドしたい場合:
+手動でビルドしたい場合:
 
 ```bat
 python setup.py build_ext --inplace
 ```
 
-Windows でコンパイラが検出されない場合、先に以下のいずれかを開いてください:
+Windows でコンパイラが検出されない場合は、先に `x64 Native Tools Command Prompt for VS 2022` を開くか、`vcvars64.bat` を実行してください。
 
-- `x64 Native Tools Command Prompt for VS 2022`
-- または Visual Studio Build Tools の `vcvars64.bat` を実行してからコマンドを実行
-
-### 5. 拡張が使用可能か確認する
-
-以下を実行してください:
-
-```bash
-python -c "import importlib.util; print(importlib.util.find_spec('came_pytorch.came_cuda_ext'))"
-```
-
-これが `None` を表示する場合、現在の環境では CUDA 拡張が利用できません。
-
-次のように拡張を直接 import して確認することもできます:
+#### CUDA 拡張がビルドされたか確認する
 
 ```bash
 python -c "import came_pytorch.came_cuda_ext; print('ext ok')"
 ```
 
-一方で、次のような確認:
+エラーや `ModuleNotFoundError` が出る場合、拡張はビルドされていません。
 
-```bash
-python -c "import torch; import came_pytorch; from came_pytorch import CAME8bit; print('cuda available:', torch.cuda.is_available()); print('ok')"
-```
+> **注意**: `import came_pytorch` が成功しても、`came_cuda_ext` がビルド済みとは限りません。
+> CUDA 拡張は実際に使われるまで遅延ロードされるためです。
 
-で分かるのは「PyTorch の CUDA が使えること」と「パッケージ自体を import できること」だけです。
-`came_cuda_ext` がビルド済みである保証にはなりません。CUDA 拡張は CUDA 固有のコードパスに入った時点で遅延ロードされます。
+拡張がプリビルドされていない場合でも、`ninja` が利用可能であれば JIT ビルドが試みられます。
 
-### よくあるミス
+#### よくあるミス
 
-- CPU 専用の PyTorch をインストールして CUDA ビルドが動作すると期待する
-- Windows で CUDA Toolkit はインストールしたが Visual Studio Build Tools をインストールしていない
-- 間違った CUDA メジャーバージョンファミリーの Toolkit を使用する
-- `pip install .` を実行しただけで CUDA 拡張が確実にコンパイルされたと思い込む
-- `import came_pytorch` や `torch.cuda.is_available()` だけで `came_cuda_ext` まで確認できたと思い込む
-- CPU テンソルや非 2D テンソルで `CAME8bit2D` を使おうとする
-
-拡張がプリビルドされていない場合、`came_pytorch.came_cuda` は `ninja` が利用可能な
-ときに JIT ビルドを試みることもできます。
-
-## 選択の目安
-
-ローカルの `sd-scripts` SDXL LoRA 実行（同一の 300 ステップ設定）で得られた傾向の一例:
-
-| オプティマイザ | 時間 | VRAM |
-|----------------|------|------|
-| `CAME` | `12:01` | `7.2 GB` |
-| `CAMECUDA` | `08:32` | `7.4 GB` |
-| `CAME8bit` | `08:47` | `7.3 GB` |
-| `CAME8bitMemory` | `09:48` | `7.0 GB` |
-
-簡単なガイドとして:
-- `CAMECUDA`: 最速モード
-- `CAME8bit`: バランスモード
-- `CAME8bitMemory`: オプティマイザの常駐 VRAM が最小
-
-これらの数値は環境に依存しますが、このフォークが意図するモードの使い分けに沿っています。
+- CPU 専用の PyTorch で CUDA ビルドを期待する
+- CUDA Toolkit だけ入れて Visual Studio Build Tools を入れていない（Windows）
+- PyTorch と CUDA Toolkit のメジャーバージョンが不一致
 
 ## 使い方
 
-純 PyTorch CAME:
+### 基本モード
+
+**CAME**（純 PyTorch、CUDA 拡張不要）:
 
 ```python
 from came_pytorch import CAME
@@ -157,20 +117,7 @@ optimizer = CAME(
 )
 ```
 
-単一エントリの 8bit オプティマイザ:
-
-```python
-from came_pytorch import CAME8bit
-
-optimizer = CAME8bit(
-    model.parameters(),
-    lr=2e-4,
-    weight_decay=1e-2,
-)
-```
-
-CUDA fp-state オプティマイザ。
-ステップ時間を最優先する場合の推奨モードです:
+**CAMECUDA**（速度重視）:
 
 ```python
 from came_pytorch import CAMECUDA
@@ -182,8 +129,19 @@ optimizer = CAMECUDA(
 )
 ```
 
-メモリ優先の 8bit オプティマイザ。
-コンパクトな 8bit 状態を保持し、一般的な 2D/1D ケースで共有 CUDA スクラッチを再利用します:
+**CAME8bit**（速度と VRAM のバランス）:
+
+```python
+from came_pytorch import CAME8bit
+
+optimizer = CAME8bit(
+    model.parameters(),
+    lr=2e-4,
+    weight_decay=1e-2,
+)
+```
+
+**CAME8bitMemory**（VRAM 最小化）:
 
 ```python
 from came_pytorch import CAME8bitMemory
@@ -195,11 +153,33 @@ optimizer = CAME8bitMemory(
 )
 ```
 
-リファレンスの完全 8bit パスを強制する:
+### 上級オプション
+
+通常は上記の基本モードで十分です。
+以下は特定の用途向けのバリアントです。
+
+**CAME8bitFull** — `CAME8bit` の内部実装を直接使用する。
+`CAME8bit` は内部的にこのクラスへ委譲しており、通常は `CAME8bit` 経由で使えば十分です:
 
 ```python
-from came_pytorch import CAME8bit
+from came_pytorch import CAME8bitFull
 
+optimizer = CAME8bitFull(model.parameters(), lr=2e-4, weight_decay=1e-2)
+```
+
+**CAME8bit2D** — 2D パラメータ専用の CUDA 高速パス。
+2D CUDA テンソルのみ対応です:
+
+```python
+from came_pytorch import CAME8bit2D
+
+optimizer = CAME8bit2D(model.parameters(), lr=2e-4, weight_decay=1e-2)
+```
+
+**CUDA 高速パスの無効化** — `CAME8bit` で CUDA 高速パスを使わず、
+リファレンス実装（`CAME8bitFull`）を強制する:
+
+```python
 optimizer = CAME8bit(
     model.parameters(),
     lr=2e-4,
@@ -208,31 +188,10 @@ optimizer = CAME8bit(
 )
 ```
 
-明示的に全状態 8bit 実装を使用する:
-
-```python
-from came_pytorch import CAME8bitFull
-
-optimizer = CAME8bitFull(model.parameters(), lr=2e-4, weight_decay=1e-2)
-```
-
-CUDA 専用 2D 高速パスを使用する:
-
-```python
-from came_pytorch import CAME8bit2D
-
-optimizer = CAME8bit2D(model.parameters(), lr=2e-4, weight_decay=1e-2)
-```
-
 ## 注意事項
 
-- 純 PyTorch の `CAME` が最も簡単なエントリポイントで、CUDA 拡張は不要です。
-- `CAMECUDA` は推奨の高スループット CUDA モードです。コンパクトな 8bit モードよりも VRAM がやや多くなります。
-- `CAME8bitMemory` はメモリ優先の実験的モードです。オプティマイザの常駐状態のオーバーヘッドを削減しますが、最速ではありません。
 - スパース勾配はサポートされていません。
 - `CAME8bit2D` は CUDA 上の 2D パラメータ専用です。
-- 8bit 状態のレイアウトは初回使用後に固定されるため、パラメータのリサイズは
-  サポートされていません。
+- 8bit 状態のレイアウトは初回使用後に固定されます。パラメータのリサイズはサポートされていません。
 - 8bit バリアントの公開 API は、本フォークの改良に伴い変更される可能性があります。
-- 本フォークのパッケージメタデータは、意図的にプレビューリリースとして
-  マーキングされています。
+- 本フォークのパッケージメタデータは、意図的にプレビューリリースとしてマーキングされています。
