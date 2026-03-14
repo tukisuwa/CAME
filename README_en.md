@@ -141,6 +141,24 @@ optimizer = CAME(
 )
 ```
 
+## Example Selection Trend
+
+One local `sd-scripts` SDXL LoRA run with the same 300-step setup produced this trend:
+
+| Optimizer | Time | VRAM |
+|-----------|------|------|
+| `CAME` | `12:01` | `7.2 GB` |
+| `CAMECUDA` | `08:32` | `7.4 GB` |
+| `CAME8bit` | `08:47` | `7.3 GB` |
+| `CAME8bitMemory` | `09:48` | `7.0 GB` |
+
+Use it as a simple guide:
+- `CAMECUDA`: fastest mode
+- `CAME8bit`: balanced mode
+- `CAME8bitMemory`: lowest persistent optimizer VRAM
+
+These numbers are environment-dependent, but they match the intended mode split of this fork.
+
 Single-entry 8-bit optimizer:
 
 ```python

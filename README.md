@@ -119,6 +119,24 @@ optimizer = CAME(
 )
 ```
 
+### Example Selection Trend
+
+One local `sd-scripts` SDXL LoRA run with the same 300-step setup produced this trend:
+
+| Optimizer | Time | VRAM |
+|-----------|------|------|
+| `CAME` | `12:01` | `7.2 GB` |
+| `CAMECUDA` | `08:32` | `7.4 GB` |
+| `CAME8bit` | `08:47` | `7.3 GB` |
+| `CAME8bitMemory` | `09:48` | `7.0 GB` |
+
+Read this as:
+- choose `CAMECUDA` when step speed matters most
+- choose `CAME8bit` for a balanced speed / memory tradeoff
+- choose `CAME8bitMemory` when persistent optimizer VRAM matters most
+
+These numbers are workload- and environment-dependent, but they reflect the intended mode split of this fork.
+
 ### Usage (CUDA fp-state)
 
 Speed-first CUDA mode without 8-bit optimizer state compression.

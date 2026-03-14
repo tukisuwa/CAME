@@ -9,7 +9,7 @@ from came_pytorch.came_cuda import (
     came_full_factored_param_update as cuda_came_full_factored_param_update,
     came_full_factored_res_step as cuda_came_full_factored_res_step,
     came_full_factored_sq_step as cuda_came_full_factored_sq_step,
-    came_full_nonfactored_step as cuda_came_full_nonfactored_step,
+    came_full_nonfactored_step_fp16_update as cuda_came_full_nonfactored_step_fp16_update,
 )
 
 
@@ -139,11 +139,11 @@ class CAME8bitMemory(CAME8bitFull):
         device = grad.device
         numel = grad.numel()
         return {
-            "update_fp32": self._get_shared_buffer(
-                kind="nonfact_update_fp32",
+            "update_fp16": self._get_shared_buffer(
+                kind="nonfact_update_fp16",
                 device=device,
                 shape=tuple(grad.shape),
-                dtype=torch.float32,
+                dtype=torch.float16,
             ),
             "sum_update_partial": self._get_shared_buffer(
                 kind="nonfact_sum_update_partial",
@@ -310,14 +310,14 @@ class CAME8bitMemory(CAME8bitFull):
     ) -> None:
         grad_fp32 = self._get_shared_grad_fp32(grad)
         shared = self._get_shared_nonfactored_cuda_buffers(grad_fp32, block_size)
-        cuda_came_full_nonfactored_step(
+        cuda_came_full_nonfactored_step_fp16_update(
             p=p.data,
             g32=grad_fp32,
             exp_avg_q=state["exp_avg_q"],
             exp_avg_absmax=state["exp_avg_absmax"],
             exp_avg_sq_q=state["exp_avg_sq_q"],
             exp_avg_sq_absmax=state["exp_avg_sq_absmax"],
-            update=shared["update_fp32"],
+            update=shared["update_fp16"],
             sum_update_partial=shared["sum_update_partial"],
             sum_update=shared["sum_update"],
             beta1=beta1,
