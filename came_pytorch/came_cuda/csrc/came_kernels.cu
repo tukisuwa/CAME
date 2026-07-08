@@ -19,6 +19,12 @@ constexpr float UQMAX = 255.0f;
 constexpr int TILE = 16;
 constexpr int VEC4_THREADS = 64; // 16 rows * (16 cols / 4)
 
+struct MaxOp {
+    __device__ __forceinline__ float operator()(const float a, const float b) const {
+        return fmaxf(a, b);
+    }
+};
+
 __device__ __forceinline__ float to_float(float x) { return x; }
 __device__ __forceinline__ float to_float(half x) { return __half2float(x); }
 __device__ __forceinline__ float to_float(__nv_bfloat16 x) { return __bfloat162float(x); }
@@ -221,7 +227,7 @@ __global__ void kUpdateSqColQuantizedFinalize(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage tmp;
-    const float block_absmax = BlockReduceT(tmp).Reduce(updated, cub::Max());
+    const float block_absmax = BlockReduceT(tmp).Reduce(updated, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_absmax > 0.0f) ? block_absmax : 1.0f;
@@ -274,7 +280,7 @@ __global__ void kUpdateSqColQuantizedFinalizeBatched(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage tmp;
-    const float block_absmax = BlockReduceT(tmp).Reduce(updated, cub::Max());
+    const float block_absmax = BlockReduceT(tmp).Reduce(updated, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_absmax > 0.0f) ? block_absmax : 1.0f;
@@ -456,7 +462,7 @@ __global__ void kUpdateSqColQuantizedFinalizeMultiTensorSameShape(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage tmp;
-    const float block_absmax = BlockReduceT(tmp).Reduce(updated, cub::Max());
+    const float block_absmax = BlockReduceT(tmp).Reduce(updated, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_absmax > 0.0f) ? block_absmax : 1.0f;
@@ -868,7 +874,7 @@ __global__ void kBlockwiseQuantF32(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage tmp;
-    const float block_max = BlockReduceT(tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(tmp).Reduce(local_max, MaxOp());
 
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
@@ -950,7 +956,7 @@ __global__ void kBlockwiseQuantF32Batched(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage tmp;
-    const float block_max = BlockReduceT(tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(tmp).Reduce(local_max, MaxOp());
 
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
@@ -1040,7 +1046,7 @@ __global__ void kCameNonfactoredSqUpdateAndQuant(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage max_tmp;
-    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, MaxOp());
     __syncthreads();
     __shared__ typename BlockReduceT::TempStorage sum_tmp;
     const float block_sum = BlockReduceT(sum_tmp).Sum(local_sum);
@@ -1096,7 +1102,7 @@ __global__ void kCameNonfactoredSqUpdateAndQuantTypedUpdate(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage max_tmp;
-    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, MaxOp());
     __syncthreads();
     __shared__ typename BlockReduceT::TempStorage sum_tmp;
     const float block_sum = BlockReduceT(sum_tmp).Sum(local_sum);
@@ -1265,7 +1271,7 @@ __global__ void kUpdateMeanColQuantizedFinalize(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage tmp;
-    const float block_absmax = BlockReduceT(tmp).Reduce(updated, cub::Max());
+    const float block_absmax = BlockReduceT(tmp).Reduce(updated, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_absmax > 0.0f) ? block_absmax : 1.0f;
@@ -1315,7 +1321,7 @@ __global__ void kUpdateMeanColQuantizedFinalizeBatched(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage tmp;
-    const float block_absmax = BlockReduceT(tmp).Reduce(updated, cub::Max());
+    const float block_absmax = BlockReduceT(tmp).Reduce(updated, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_absmax > 0.0f) ? block_absmax : 1.0f;
@@ -1412,7 +1418,7 @@ __global__ void kUpdateMeanColQuantizedFinalizeMultiTensorSameShape(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage tmp;
-    const float block_absmax = BlockReduceT(tmp).Reduce(updated, cub::Max());
+    const float block_absmax = BlockReduceT(tmp).Reduce(updated, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_absmax > 0.0f) ? block_absmax : 1.0f;
@@ -1517,7 +1523,7 @@ __global__ void kCameNonfactoredExpAvgParamUpdate(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage max_tmp;
-    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_max > 0.0f) ? block_max : 1.0f;
@@ -1574,7 +1580,7 @@ __global__ void kCameNonfactoredExpAvgParamUpdateTypedUpdate(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage max_tmp;
-    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_max > 0.0f) ? block_max : 1.0f;
@@ -1636,7 +1642,7 @@ __global__ void kCameNonfactoredSqUpdateAndQuantBatched(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage max_tmp;
-    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, MaxOp());
     __syncthreads();
     __shared__ typename BlockReduceT::TempStorage sum_tmp;
     const float block_sum = BlockReduceT(sum_tmp).Sum(local_sum);
@@ -1698,7 +1704,7 @@ __global__ void kCameNonfactoredExpAvgParamUpdateBatched(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage max_tmp;
-    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_max > 0.0f) ? block_max : 1.0f;
@@ -1772,7 +1778,7 @@ __global__ void kCameNonfactoredSqUpdateAndQuantMultiTensor(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage max_tmp;
-    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, MaxOp());
     __syncthreads();
     __shared__ typename BlockReduceT::TempStorage sum_tmp;
     const float block_sum = BlockReduceT(sum_tmp).Sum(local_sum);
@@ -1836,7 +1842,7 @@ __global__ void kCameNonfactoredSqUpdateAndQuantMultiTensorTypedUpdate(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage max_tmp;
-    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, MaxOp());
     __syncthreads();
     __shared__ typename BlockReduceT::TempStorage sum_tmp;
     const float block_sum = BlockReduceT(sum_tmp).Sum(local_sum);
@@ -1900,7 +1906,7 @@ __global__ void kCameNonfactoredExpAvgParamUpdateMultiTensor(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage max_tmp;
-    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_max > 0.0f) ? block_max : 1.0f;
@@ -1964,7 +1970,7 @@ __global__ void kCameNonfactoredExpAvgParamUpdateMultiTensorTypedUpdate(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage max_tmp;
-    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_max > 0.0f) ? block_max : 1.0f;
@@ -2026,7 +2032,7 @@ __global__ void kCameNonfactoredSqUpdateAndQuantMultiTensorVarlen(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage max_tmp;
-    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, MaxOp());
     __syncthreads();
     __shared__ typename BlockReduceT::TempStorage sum_tmp;
     const float block_sum = BlockReduceT(sum_tmp).Sum(local_sum);
@@ -2088,7 +2094,7 @@ __global__ void kCameNonfactoredExpAvgParamUpdateMultiTensorVarlen(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage max_tmp;
-    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_max > 0.0f) ? block_max : 1.0f;
@@ -2153,7 +2159,7 @@ __global__ void kCameNonfactoredSqUpdateAndQuantMultiTensorCompactVarlen(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage max_tmp;
-    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, MaxOp());
     __syncthreads();
     __shared__ typename BlockReduceT::TempStorage sum_tmp;
     const float block_sum = BlockReduceT(sum_tmp).Sum(local_sum);
@@ -2218,7 +2224,7 @@ __global__ void kCameNonfactoredExpAvgParamUpdateMultiTensorCompactVarlen(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage max_tmp;
-    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(max_tmp).Reduce(local_max, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_max > 0.0f) ? block_max : 1.0f;
@@ -2281,7 +2287,7 @@ __global__ void kCameFactoredExpAvgResPrepare(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage tmp;
-    const float block_max = BlockReduceT(tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(tmp).Reduce(local_max, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_max > 0.0f) ? block_max : 1.0f;
@@ -2388,7 +2394,7 @@ __global__ void kCameFactoredExpAvgResPrepareBatched(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage tmp;
-    const float block_max = BlockReduceT(tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(tmp).Reduce(local_max, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_max > 0.0f) ? block_max : 1.0f;
@@ -2460,7 +2466,7 @@ __global__ void kCameFactoredExpAvgResPrepareMultiTensorSameShape(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage tmp;
-    const float block_max = BlockReduceT(tmp).Reduce(local_max, cub::Max());
+    const float block_max = BlockReduceT(tmp).Reduce(local_max, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_max > 0.0f) ? block_max : 1.0f;
@@ -2634,7 +2640,7 @@ __global__ void kUpdateExpAvgQuantAndResSumsTiled(
     float absval = valid ? fabsf(m_new) : 0.0f;
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage tmp;
-    const float block_absmax = BlockReduceT(tmp).Reduce(absval, cub::Max());
+    const float block_absmax = BlockReduceT(tmp).Reduce(absval, MaxOp());
     __shared__ float shared_absmax;
     if (tid == 0) {
         shared_absmax = (block_absmax > 0.0f) ? block_absmax : 1.0f;
@@ -2757,7 +2763,7 @@ __global__ void kUpdateResColQuantizedFinalize(
 
     using BlockReduceT = cub::BlockReduce<float, THREADS>;
     __shared__ typename BlockReduceT::TempStorage tmp;
-    const float block_absmax = BlockReduceT(tmp).Reduce(updated, cub::Max());
+    const float block_absmax = BlockReduceT(tmp).Reduce(updated, MaxOp());
     __shared__ float shared_absmax;
     if (threadIdx.x == 0) {
         shared_absmax = (block_absmax > 0.0f) ? block_absmax : 1.0f;
@@ -2891,7 +2897,7 @@ __global__ void kUpdateExpAvgQuantAndResSumsTiledVec4Half(
     const float absval = fmaxf(fmaxf(fabsf(m0_new), fabsf(m1_new)), fmaxf(fabsf(m2_new), fabsf(m3_new)));
     using BlockReduceT = cub::BlockReduce<float, VEC4_THREADS>;
     __shared__ typename BlockReduceT::TempStorage reduce_tmp;
-    const float block_absmax = BlockReduceT(reduce_tmp).Reduce(absval, cub::Max());
+    const float block_absmax = BlockReduceT(reduce_tmp).Reduce(absval, MaxOp());
 
     __shared__ float shared_absmax;
     if (tid == 0) {
@@ -3086,7 +3092,7 @@ __global__ void kUpdateExpAvgQuantAndResSumsTiledVec4Bf16(
     const float absval = fmaxf(fmaxf(fabsf(m0_new), fabsf(m1_new)), fmaxf(fabsf(m2_new), fabsf(m3_new)));
     using BlockReduceT = cub::BlockReduce<float, VEC4_THREADS>;
     __shared__ typename BlockReduceT::TempStorage reduce_tmp;
-    const float block_absmax = BlockReduceT(reduce_tmp).Reduce(absval, cub::Max());
+    const float block_absmax = BlockReduceT(reduce_tmp).Reduce(absval, MaxOp());
 
     __shared__ float shared_absmax;
     if (tid == 0) {
@@ -3264,7 +3270,7 @@ __global__ void kUpdateExpAvgQuantAndResSumsTiledVec4Float(
     const float absval = fmaxf(fmaxf(fabsf(m0_new), fabsf(m1_new)), fmaxf(fabsf(m2_new), fabsf(m3_new)));
     using BlockReduceT = cub::BlockReduce<float, VEC4_THREADS>;
     __shared__ typename BlockReduceT::TempStorage reduce_tmp;
-    const float block_absmax = BlockReduceT(reduce_tmp).Reduce(absval, cub::Max());
+    const float block_absmax = BlockReduceT(reduce_tmp).Reduce(absval, MaxOp());
 
     __shared__ float shared_absmax;
     if (tid == 0) {
